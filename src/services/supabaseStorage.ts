@@ -1,6 +1,6 @@
 /**
- * PorttoHub — Módulo Oficial de Storage
- * Conecta-se diretamente ao bucket 'encomendas' no Supabase Project kkeizhscivyfjgetnbke
+ * PorttoHub — Módulo Oficial de Supabase Storage
+ * Conecta-se ao bucket 'encomendas' no Supabase Project pkemipwowkcnstbazlma
  */
 export {
   SUPABASE_PROJECT_URL as DEFAULT_SUPABASE_URL,

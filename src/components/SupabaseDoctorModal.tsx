@@ -665,7 +665,7 @@ export default function SupabaseDoctorModal({ isOpen, onClose, abaInicial = 'con
                   <li>
                     Acesse seu painel do Supabase: {' '}
                     <a
-                      href="https://supabase.com/dashboard/project/kkeizhscivyfjgetnbke/sql/new"
+                      href="https://supabase.com/dashboard/project/pkemipwowkcnstbazlma/sql/new"
                       target="_blank"
                       rel="noreferrer"
                       className="font-bold underline text-blue-950 inline-flex items-center gap-1"
@@ -942,8 +942,8 @@ export default function SupabaseDoctorModal({ isOpen, onClose, abaInicial = 'con
 
               {/* Dados de Conexão com o Supabase */}
               <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs text-slate-600 space-y-1 font-mono">
-                <p><strong>API URL:</strong> https://kkeizhscivyfjgetnbke.supabase.co/rest/v1/</p>
-                <p><strong>Projeto ID:</strong> kkeizhscivyfjgetnbke</p>
+                <p><strong>API URL:</strong> https://pkemipwowkcnstbazlma.supabase.co/rest/v1/</p>
+                <p><strong>Projeto ID:</strong> pkemipwowkcnstbazlma</p>
                 <p><strong>Estratégia de TTL:</strong> 600s Condomínios | 300s Moradores/Operadores | 60s Encomendas/Bancada</p>
               </div>
             </div>

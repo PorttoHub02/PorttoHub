@@ -12,8 +12,8 @@ import path from 'path';
 import { redisCache } from './src/server/redisClient.ts';
 dotenv.config();
 
-process.env.VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://kkeizhscivyfjgetnbke.supabase.co';
-process.env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtrZWl6aHNjaXZ5ZmpnZXRuYmtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI2ODk5NDUsImV4cCI6MjEwODI2NTk0NX0.hQzzvICbZfNPziWrj8DlD-A8-Vm4xbr25Nr0xQe3BEA';
+process.env.VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
+process.env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBrZW1pcHdvd2tjbnN0YmF6bG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MjI0MDQsImV4cCI6MjEwODk5ODQwNH0.oGV6ru4O-OgZ-LeSAtZp0kCZZqpK2BR49F1WCbO1yR0';
 
 const app = express();
 const port = 3000;
@@ -558,7 +558,7 @@ app.post('/api/cache/query', async (req, res) => {
     }
 
     // 2. Cache Miss: Busca no Supabase REST API
-    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://kkeizhscivyfjgetnbke.supabase.co';
+    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
     const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
     const queryParams = new URLSearchParams();
@@ -664,7 +664,7 @@ app.get('/api/cache/stats', async (_req, res) => {
     return res.json({
       sucesso: true,
       ...stats,
-      supabaseUrl: process.env.VITE_SUPABASE_URL || 'https://kkeizhscivyfjgetnbke.supabase.co',
+      supabaseUrl: process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co',
       horarioServidor: new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' })
     });
   } catch (err: any) {
@@ -691,7 +691,7 @@ app.post('/api/cache/warmup', async (req, res) => {
   const start = Date.now();
   try {
     const { condominioId } = req.body || {};
-    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://kkeizhscivyfjgetnbke.supabase.co';
+    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
     const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
     const tabelasParaAquecer: { table: string; ttl: number; select: string }[] = [
@@ -746,7 +746,7 @@ app.post('/api/cache/warmup', async (req, res) => {
  */
 app.get('/api/cache/benchmark', async (_req, res) => {
   try {
-    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://kkeizhscivyfjgetnbke.supabase.co';
+    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
     const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
     // 1. Teste Supabase Direto

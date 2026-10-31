@@ -1,103 +1,66 @@
+/**
+ * Script de Teste e Validação da Conexão com o Supabase Oficial
+ * Projeto: pkemipwowkcnstbazlma
+ */
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://kkeizhscivyfjgetnbke.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtrZWl6aHNjaXZ5ZmpnZXRuYmtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI2ODk5NDUsImV4cCI6MjEwODI2NTk0NX0.hQzzvICbZfNPziWrj8DlD-A8-Vm4xbr25Nr0xQe3BEA';
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
+const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBrZW1pcHdvd2tjbnN0YmF6bG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MjI0MDQsImV4cCI6MjEwODk5ODQwNH0.oGV6ru4O-OgZ-LeSAtZp0kCZZqpK2BR49F1WCbO1yR0';
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+console.log('--- TESTE DE CONEXÃO SUPABASE (PORTTOHUB) ---');
+console.log('URL:', SUPABASE_URL);
 
-const TABLES_TO_CHECK = [
-  'condominios',
-  'operadores',
-  'moradores',
-  'entregadores',
-  'lotes_re',
-  'encomendas_itens',
-  'locais_armazenamento',
-  'custodia',
-  'materiais_posto',
-  'chaves',
-  'movimentacao_chaves',
-  'prestadores_obras',
-  'entradas_prestadores',
-  'manutencoes',
-  'ocorrencias_livro',
-  'passagens_posto',
-  'rotas_ronda',
-  'pontos_ronda',
-  'execucoes_ronda',
-  'leituras_ronda',
-  'auditoria_sistema',
-  // Legadas / duplicadas que possam existir:
-  'usuarios_sistema',
-  'unidades',
-  'blocos',
-  'encomendas',
-  'custodia_itens',
-  'materiais',
-  'inspecoes_materiais',
-  'movimentacoes_chaves',
-  'prestadores',
-  'visitas_prestadores',
-  'ocorrencias',
-  'passagem_posto',
-  'passagens_plantao',
-  'pontos_verificacao',
-  'rondas_executadas'
-];
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-async function runDiagnosis() {
-  console.log('=== TESTE DE CONECTIVIDADE E TABELAS SUPABASE ===');
-  console.log('URL:', supabaseUrl);
+async function testarConexao() {
+  const tabelasParaChecar = [
+    'condominios',
+    'configuracoes',
+    'operadores',
+    'moradores',
+    'encomendas_itens',
+    'lotes_re',
+    'custodia',
+    'chaves',
+    'rondas_execucao',
+    'ocorrencias',
+    'passagens_posto',
+    'areas_comuns'
+  ];
 
-  const results: Record<string, any> = {};
-
-  for (const table of TABLES_TO_CHECK) {
+  console.log('\nVerificando tabelas no Supabase:');
+  for (const tabela of tabelasParaChecar) {
     try {
       const { data, error, count } = await supabase
-        .from(table)
-        .select('*', { count: 'exact', head: false })
-        .limit(1);
+        .from(tabela)
+        .select('*', { count: 'exact', head: true });
 
       if (error) {
-        results[table] = {
-          exists: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint
-        };
+        if (error.code === 'PGRST205') {
+          console.log(`❌ [${tabela}]: Tabela ainda não criada no banco (Execute o supabase_schema_porttohub.sql)`);
+        } else {
+          console.log(`⚠️ [${tabela}]: Erro (${error.code}) - ${error.message}`);
+        }
       } else {
-        const sampleRow = data && data[0] ? Object.keys(data[0]) : [];
-        results[table] = {
-          exists: true,
-          count: count ?? data?.length,
-          columns: sampleRow,
-          sample: data?.[0]
-        };
+        console.log(`✅ [${tabela}]: Conectada e pronta! Total de registros: ${count ?? 0}`);
       }
-    } catch (e: any) {
-      results[table] = {
-        exists: false,
-        error: e.message
-      };
+    } catch (err: any) {
+      console.log(`❌ [${tabela}]: Erro de rede: ${err.message}`);
     }
   }
 
-  console.log('\n--- RESULTADOS POR TABELA ---');
-  let existingCount = 0;
-  let missingCount = 0;
-
-  for (const [table, res] of Object.entries(results)) {
-    if (res.exists) {
-      existingCount++;
-      console.log(`✅ [EXISTE] ${table.padEnd(25)} | Linhas: ${res.count} | Colunas detectadas: ${res.columns.length > 0 ? res.columns.join(', ') : '(Tabela vazia)'}`);
+  // Testa buckets do Storage
+  console.log('\nVerificando Buckets de Storage:');
+  try {
+    const { data: buckets, error: bError } = await supabase.storage.listBuckets();
+    if (bError) {
+      console.log('⚠️ Storage listBuckets:', bError.message);
     } else {
-      missingCount++;
-      console.log(`❌ [FALTA OU ERRO] ${table.padEnd(25)} | Erro: ${res.error} (código: ${res.code || 'N/A'})`);
+      console.log('✅ Buckets encontrados:', buckets?.map(b => b.name).join(', ') || 'Nenhum bucket criado ainda');
     }
+  } catch (e: any) {
+    console.log('⚠️ Erro ao verificar storage:', e.message);
   }
-
-  console.log(`\nResumo: ${existingCount} tabelas encontradas, ${missingCount} com erro ou inexistentes.`);
 }
 
-runDiagnosis().catch(console.error);
+testarConexao();

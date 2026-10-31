@@ -97,11 +97,12 @@ export const BANCOS_PADRAO: BancoPredefinido[] = [
     descricao: 'Base com 247 entregadores, 15 operadores, condomínios e dados históricos'
   },
   {
-    id: 'porttohub_novo',
-    nome: 'banco de dados PorttoHub',
-    url: 'https://kkeizhscivyfjgetnbke.supabase.co',
-    key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtrZWl6aHNjaXZ5ZmpnZXRuYmtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI2ODk5NDUsImV4cCI6MjEwODI2NTk0NX0.hQzzvICbZfNPziWrj8DlD-A8-Vm4xbr25Nr0xQe3BEA',
-    descricao: 'Banco de dados ativo oficial do PorttoHub v2.0'
+    id: 'porttohub_supabase_novo',
+    nome: 'Supabase Oficial PorttoHub (pkemipwowkcnstbazlma)',
+    url: 'https://pkemipwowkcnstbazlma.supabase.co',
+    key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBrZW1pcHdvd2tjbnN0YmF6bG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MjI0MDQsImV4cCI6MjEwODk5ODQwNH0.oGV6ru4O-OgZ-LeSAtZp0kCZZqpK2BR49F1WCbO1yR0',
+    descricao: 'Novo Banco de dados PostgreSQL com Supabase oficial',
+    padrao: true
   }
 ];
 
