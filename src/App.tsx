@@ -220,20 +220,22 @@ export default function App() {
 
             // Consultas em paralelo no Supabase cortam o tempo de resposta pela metade
             const [opRes, condoRes] = await Promise.all([
-              supabase
-                .from('operadores')
-                .select(opCols)
-                .eq('id', sessao.operadorId)
-                .eq('ativo', true)
-                .maybeSingle()
-                .catch(() => ({ data: null, error: null })),
+              Promise.resolve(
+                supabase
+                  .from('operadores')
+                  .select(opCols)
+                  .eq('id', sessao.operadorId)
+                  .eq('ativo', true)
+                  .maybeSingle()
+              ).catch(() => ({ data: null, error: null })),
               targetCondo && targetCondo !== 'todos' && targetCondo !== 'global' && isUUID(targetCondo)
-                ? supabase
-                    .from('condominios')
-                    .select('*')
-                    .eq('id', targetCondo)
-                    .maybeSingle()
-                    .catch(() => ({ data: null, error: null }))
+                ? Promise.resolve(
+                    supabase
+                      .from('condominios')
+                      .select('*')
+                      .eq('id', targetCondo)
+                      .maybeSingle()
+                  ).catch(() => ({ data: null, error: null }))
                 : Promise.resolve({ data: null, error: null })
             ]);
 
