@@ -146,6 +146,49 @@ export async function cachedQuery<T = any[]>(options: CachedQueryOptions): Promi
       });
       return dadosFinais;
     } catch (supErr: any) {
+      // Trata amigavelmente quando o banco é recém-criado e aguarda a execução do script SQL inicial
+      if (
+        supErr?.code === 'PGRST205' ||
+        supErr?.code === '42P01' ||
+        String(supErr?.message || '').includes('PGRST205') ||
+        String(supErr?.message || '').includes('schema cache')
+      ) {
+        console.warn(
+          `[Supabase Setup] Tabela "${options.table}" aguarda execução do schema SQL no Supabase (${supErr?.code || 'PGRST205'}). Utilizando fallback seguro.`
+        );
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('supabase:schema_pendente', {
+              detail: { table: options.table, code: supErr?.code || 'PGRST205' }
+            })
+          );
+        }
+
+        let dadosFallback: any = [];
+        if (options.table === 'condominios') {
+          dadosFallback = [
+            {
+              id: 'condo_principal_001',
+              nome: 'Condomínio Residencial Portto Real',
+              endereco: 'Av. Paulista, 1000 - Bela Vista',
+              cidade: 'São Paulo',
+              uf: 'SP',
+              tipo_estrutura: 'apartamentos',
+              qtd_blocos: 2,
+              unidades_por_bloco: 80,
+              ativo: true
+            }
+          ];
+        }
+
+        clientMemoryCache.set(clientKey, {
+          data: dadosFallback as T,
+          timestamp: Date.now(),
+          ttlMs: 30000 // 30 segundos de cache para evitar sobrecarga de requisições
+        });
+        return dadosFallback as T;
+      }
+
       console.error(`[Cache Fallback] Erro na consulta da tabela ${options.table}:`, supErr);
       throw supErr;
     }

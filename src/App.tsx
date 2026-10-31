@@ -142,11 +142,18 @@ export default function App() {
   const customVisual = useCustomizacaoVisual(condominioAtivoId || operador?.condominio_id);
   const [, setForcarAtualizacaoTema] = useState(0);
 
+  const [schemaPendente, setSchemaPendente] = useState(false);
+
   useEffect(() => {
     inicializarTema();
     const handleTema = () => setForcarAtualizacaoTema(n => n + 1);
+    const handleSchemaPendente = () => setSchemaPendente(true);
     window.addEventListener('infport_tema_alterado', handleTema);
-    return () => window.removeEventListener('infport_tema_alterado', handleTema);
+    window.addEventListener('supabase:schema_pendente', handleSchemaPendente);
+    return () => {
+      window.removeEventListener('infport_tema_alterado', handleTema);
+      window.removeEventListener('supabase:schema_pendente', handleSchemaPendente);
+    };
   }, []);
 
   const [menuAberto, setMenuAberto] = useState(true);
@@ -218,13 +225,15 @@ export default function App() {
                 .select(opCols)
                 .eq('id', sessao.operadorId)
                 .eq('ativo', true)
-                .maybeSingle(),
+                .maybeSingle()
+                .catch(() => ({ data: null, error: null })),
               targetCondo && targetCondo !== 'todos' && targetCondo !== 'global' && isUUID(targetCondo)
                 ? supabase
                     .from('condominios')
                     .select('*')
                     .eq('id', targetCondo)
                     .maybeSingle()
+                    .catch(() => ({ data: null, error: null }))
                 : Promise.resolve({ data: null, error: null })
             ]);
 
@@ -497,20 +506,33 @@ export default function App() {
         orderBy: { field: 'nome', ascending: true },
         ttlSeconds: 600
       });
-      setListaCondominios(condos || []);
-      salvarCacheLocal('condominios', condos || [], 'global');
+      const listaFinal = (condos && condos.length > 0) ? condos : [
+        {
+          id: 'condo_principal_001',
+          nome: 'Condomínio Residencial Portto Real',
+          endereco: 'Av. Paulista, 1000 - Bela Vista',
+          cidade: 'São Paulo',
+          uf: 'SP',
+          tipo_estrutura: 'apartamentos',
+          qtd_blocos: 2,
+          unidades_por_bloco: 80,
+          ativo: true
+        }
+      ];
+      setListaCondominios(listaFinal);
+      salvarCacheLocal('condominios', listaFinal, 'global');
 
       // Se for admin e o condomínio ativo atual for vazio, verifica seleção preferencial
-      if (eAdmin && condos && condos.length > 0) {
+      if (eAdmin && listaFinal && listaFinal.length > 0) {
         const savedCondo = localStorage.getItem('infport_condominio_ativo_id');
         if (savedCondo !== null) {
-          if (savedCondo && condos.some(c => c.id === savedCondo)) {
+          if (savedCondo && listaFinal.some(c => c.id === savedCondo)) {
             setCondominioAtivoId(savedCondo);
-            const cObj = condos.find(c => c.id === savedCondo);
+            const cObj = listaFinal.find(c => c.id === savedCondo);
             if (cObj) setCondominio(cObj);
           }
         } else if (!condominioAtivoId) {
-          const condoReal = condos[0];
+          const condoReal = listaFinal[0];
           if (condoReal) {
             setCondominioAtivoId(condoReal.id);
             setCondominio(condoReal);
@@ -519,10 +541,19 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Erro ao carregar condomínios (tentando cache offline):', err);
+      console.warn('Aviso ao carregar condomínios (utilizando cache offline):', err);
       const cache = obterCacheLocal<any[]>('condominios', 'global', []);
       if (cache && cache.length > 0) {
         setListaCondominios(cache);
+      } else {
+        setListaCondominios([
+          {
+            id: 'condo_principal_001',
+            nome: 'Condomínio Residencial Portto Real',
+            endereco: 'Av. Paulista, 1000 - Bela Vista',
+            ativo: true
+          }
+        ]);
       }
     }
   };
@@ -701,19 +732,23 @@ export default function App() {
       }
 
       let condData = null;
-      if (opData.condominio_id && opData.condominio_id !== 'todos' && opData.condominio_id !== 'global') {
-        const { data: cData } = await supabase
-          .from('condominios')
-          .select('*')
-          .eq('id', opData.condominio_id)
-          .maybeSingle();
-        condData = cData;
-      } else {
-        // Para admin geral com acesso total, busca o primeiro condomínio disponível
-        const { data: listaCondos } = await supabase.from('condominios').select('*').limit(1);
-        if (listaCondos && listaCondos.length > 0) {
-          condData = listaCondos[0];
+      try {
+        if (opData.condominio_id && opData.condominio_id !== 'todos' && opData.condominio_id !== 'global') {
+          const { data: cData } = await supabase
+            .from('condominios')
+            .select('*')
+            .eq('id', opData.condominio_id)
+            .maybeSingle();
+          condData = cData;
+        } else {
+          // Para admin geral com acesso total, busca o primeiro condomínio disponível
+          const { data: listaCondos } = await supabase.from('condominios').select('*').limit(1);
+          if (listaCondos && listaCondos.length > 0) {
+            condData = listaCondos[0];
+          }
         }
+      } catch {
+        condData = null;
       }
 
       const idCondFinal = condData?.id || (opData.condominio_id !== 'todos' && opData.condominio_id !== 'global' ? opData.condominio_id : '');
@@ -830,7 +865,7 @@ export default function App() {
           setCondominio(cData);
         }
       } catch (err) {
-        console.error('Erro ao sincronizar condomínio após troca de operador:', err);
+        console.warn('Aviso ao sincronizar condomínio após troca de operador:', err);
       }
       carregarNiveisAcesso(novoOperador.condominio_id);
       preCarregarDadosCondominio(novoOperador.condominio_id);
@@ -1360,6 +1395,24 @@ export default function App() {
         {/* CONTEÚDO PRINCIPAL */}
         <div className="flex-1 flex flex-col min-w-0">
           
+          {schemaPendente && (
+            <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-bold flex flex-wrap items-center justify-between shadow-md border-b border-amber-600 gap-2 z-10">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 shrink-0 animate-bounce" />
+                <span>
+                  <strong>Aguardando Schema SQL no Supabase:</strong> As tabelas ainda não foram criadas no projeto <code>pkemipwowkcnstbazlma</code>.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalSupabaseDoctorAberto(true)}
+                className="bg-slate-950 hover:bg-slate-900 text-white px-3 py-1.5 rounded-xl text-xs font-black shadow-xs whitespace-nowrap cursor-pointer transition flex items-center gap-1.5"
+              >
+                <span>Copiar Script SQL Mestre</span>
+              </button>
+            </div>
+          )}
+
           {!eSindico && (
             <AlertaRondaGlobal 
               onNavegarRondas={() => mudarModulo('rondas')} 
@@ -1858,6 +1911,25 @@ export default function App() {
             Sistema Integrado de Portaria & Segurança Patrimonial
           </p>
         </div>
+
+        {schemaPendente && (
+          <div className="bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 p-3.5 rounded-2xl text-xs mb-4 border border-amber-300 dark:border-amber-800/60 flex flex-col gap-2">
+            <div className="flex items-center gap-2 font-bold text-amber-900 dark:text-amber-100">
+              <Database className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-pulse" />
+              <span>Aguardando Schema SQL no Supabase</span>
+            </div>
+            <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+              O projeto Supabase <code>pkemipwowkcnstbazlma</code> ainda não possui as tabelas criadas no banco de dados.
+            </p>
+            <button
+              type="button"
+              onClick={() => setModalSupabaseDoctorAberto(true)}
+              className="bg-amber-600 hover:bg-amber-500 text-white font-bold py-1.5 px-3 rounded-xl text-xs transition cursor-pointer self-start shadow-xs flex items-center gap-1.5"
+            >
+              <span>Ver e Copiar Script SQL Mestre</span>
+            </button>
+          </div>
+        )}
 
         {erro && (
           <div className="bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 p-3.5 rounded-xl text-sm mb-4 border border-red-200 dark:border-red-900/50 break-words font-semibold">
