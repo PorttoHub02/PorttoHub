@@ -1347,58 +1347,45 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                       </div>
                     )}
 
-                    {/* DADOS DA FACIAL LIDA NA HORA (EXIBIÇÃO INTEGRADA NO VISOR) */}
-                    {lastMatchResult && (
-                      <div className={`absolute bottom-14 left-3 right-3 z-25 rounded-2xl p-2.5 sm:p-3.5 backdrop-blur-md border shadow-2xl transition-all duration-300 ${
+                    {/* DADOS DA FACIAL LIDA NO MOMENTO (TRANSLÚCIDO - IMAGEM DA CÂMERA DE FUNDO 100% VISÍVEL) */}
+                    {(scanningStatus === 'matched' || scanningStatus === 'denied') && lastMatchResult && (
+                      <div className={`absolute bottom-13 left-3 right-3 z-30 rounded-2xl p-3 sm:p-3.5 backdrop-blur-xs border shadow-2xl transition-all duration-300 animate-in fade-in slide-in-from-bottom-2 ${
                         lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo'
-                          ? 'bg-slate-950/92 border-emerald-500/70 shadow-emerald-950/80'
-                          : 'bg-slate-950/92 border-red-500/70 shadow-red-950/80'
+                          ? 'bg-black/35 border-emerald-400/80 shadow-emerald-950/40'
+                          : 'bg-black/35 border-red-500/80 shadow-red-950/40'
                       }`}>
-                        <div className="flex items-center justify-between gap-2.5">
-                          {/* Avatares Lado a Lado (Foto do Cadastro & Foto Capturada no Tótem) */}
-                          <div className="flex items-center space-x-2.5 min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          {/* Miniatura e Dados da Pessoa Lida no Momento */}
+                          <div className="flex items-center space-x-3 min-w-0">
                             <div className="relative shrink-0">
                               <img 
-                                src={lastMatchResult.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250'} 
+                                src={lastCapturedPiP || lastMatchResult.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250'} 
                                 alt={lastMatchResult.name} 
-                                className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl object-cover border-2 border-slate-700 shadow"
+                                className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl object-cover border-2 border-white/40 shadow"
                               />
-                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] bg-slate-900 border border-slate-700 px-1 rounded text-slate-300 font-bold uppercase">
-                                Cadastro
-                              </span>
                             </div>
 
-                            {lastCapturedPiP && (
-                              <div className="relative shrink-0">
-                                <img 
-                                  src={lastCapturedPiP} 
-                                  alt="Captura ao Vivo" 
-                                  className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl object-cover border-2 border-cyan-400 shadow"
-                                />
-                                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] bg-cyan-950 border border-cyan-500/70 px-1 rounded text-cyan-300 font-bold uppercase">
-                                  Tótem
-                                </span>
-                              </div>
-                            )}
-
-                            {/* Informações da Facial Lida na Hora */}
                             <div className="min-w-0">
                               <div className="flex items-center space-x-1.5">
-                                <span className="text-[9px] uppercase font-bold tracking-wider text-cyan-400">
-                                  Facial Lida na Hora
+                                <span className={`text-[10px] uppercase font-black tracking-wider block drop-shadow ${
+                                  lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo'
+                                    ? 'text-emerald-400'
+                                    : 'text-red-400'
+                                }`}>
+                                  {lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo' ? '✓ Reconhecido no Momento' : '✗ Acesso Negado'}
                                 </span>
-                                <span className="text-[9px] text-slate-400 font-mono">
+                                <span className="text-[9px] text-white/80 font-mono drop-shadow">
                                   • {lastMatchResult.timestamp || 'Agora'}
                                 </span>
                               </div>
-                              <h4 className="text-white font-bold text-sm sm:text-base truncate leading-tight">
+                              <h4 className="text-white font-extrabold text-sm sm:text-base truncate leading-tight drop-shadow-md">
                                 {lastMatchResult.name}
                               </h4>
-                              <p className="text-xs text-slate-300 font-mono truncate">
-                                {lastMatchResult.unit} {lastMatchResult.type ? `• ${lastMatchResult.type}` : ''}
+                              <p className="text-xs sm:text-sm text-cyan-300 font-bold font-mono truncate drop-shadow">
+                                Unidade: {lastMatchResult.unit} {lastMatchResult.type ? `(${lastMatchResult.type})` : ''}
                               </p>
                               {lastMatchResult.reason && (
-                                <p className="text-[10px] text-red-300 truncate font-sans">
+                                <p className="text-[10px] text-red-300 font-semibold truncate drop-shadow">
                                   {lastMatchResult.reason}
                                 </p>
                               )}
@@ -1407,31 +1394,33 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
                           {/* Status de Liberação e Pulso Relé */}
                           <div className="flex flex-col items-end shrink-0 space-y-1">
-                            <span className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold uppercase tracking-wider border ${
+                            <span className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-black uppercase tracking-wider border drop-shadow ${
                               lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo'
-                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/60'
-                                : 'bg-red-500/20 text-red-300 border-red-500/60'
+                                ? 'bg-emerald-500/30 text-emerald-300 border-emerald-400/70'
+                                : 'bg-red-500/30 text-red-300 border-red-500/70'
                             }`}>
-                              {lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo' ? '✓ Liberado' : '✗ Negado'}
-                            </span>
-                            <span className="text-[9px] font-mono font-bold text-slate-400">
                               {relayGateStatus.pedestrian 
-                                ? <span className="text-emerald-400 font-bold animate-pulse">PORTÃO ABERTO ({pulseCountdown}s)</span>
-                                : 'PORTÃO FECHADO'}
+                                ? `PORTÃO ABERTO (${pulseCountdown}s)` 
+                                : (lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo' ? 'LIBERADO' : 'NEGADO')}
+                            </span>
+                            <span className="text-[9px] font-mono font-bold text-white/80 drop-shadow">
+                              {relayGateStatus.pedestrian 
+                                ? <span className="text-emerald-300 font-bold animate-pulse">Relé Ativo</span>
+                                : 'Relé Aguardando'}
                             </span>
                           </div>
                         </div>
                       </div>
                     )}
 
-                    {/* Live Scanner Controls Overlay */}
-                    <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between bg-slate-950/80 backdrop-blur px-3 sm:px-4 py-2 rounded-xl border border-slate-800/80 text-[11px] sm:text-xs">
+                    {/* Live Scanner Controls Overlay (Translúcido) */}
+                    <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between bg-black/30 backdrop-blur-xs px-3 sm:px-4 py-1.5 rounded-xl border border-white/10 text-[11px] sm:text-xs text-white">
                       <div className="flex items-center space-x-2">
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-                        <span className="font-semibold text-slate-200">Liveness: <strong className="text-cyan-400">{livenessScore}%</strong></span>
+                        <span className="font-semibold text-white drop-shadow">Liveness: <strong className="text-cyan-300">{livenessScore}%</strong></span>
                         <button 
                           onClick={() => setCameraZoom(prev => prev === 0.5 ? 1.0 : 0.5)}
-                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 cursor-pointer"
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/40 hover:bg-black/60 text-cyan-300 border border-white/20 cursor-pointer"
                           title="Alternar Zoom da Câmera (0.5x grande angular ou 1.0x)"
                         >
                           {cameraZoom}x
@@ -1442,64 +1431,18 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                           onClick={() => setAutoScanEnabled(prev => !prev)}
                           className={`text-[10px] font-mono px-2 py-0.5 rounded-lg border transition cursor-pointer ${
                             autoScanEnabled 
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
-                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                              ? 'bg-emerald-500/30 text-emerald-200 border-emerald-400/50' 
+                              : 'bg-black/40 text-white/70 border-white/20'
                           }`}
                           title="Ligar/Desligar leitura automática contínua"
                         >
                           Auto-Scan: {autoScanEnabled ? 'ON' : 'OFF'}
                         </button>
-                        <span className="font-mono text-slate-400 uppercase text-[10px] sm:text-[11px]">
+                        <span className="font-mono text-white/70 uppercase text-[10px] sm:text-[11px] drop-shadow">
                           {currentCondo.code}
                         </span>
                       </div>
                     </div>
-
-                    {/* GRANDE BANNER FLUTUANTE DE SUCESSO (VERDE NEON) */}
-                    {scanningStatus === 'matched' && lastMatchResult && (
-                      <div className="absolute inset-x-3 top-3 z-30 bg-emerald-950/95 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/50 backdrop-blur-md p-4 rounded-2xl animate-in fade-in slide-in-from-top-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center space-x-3 min-w-0">
-                            <div className="p-2 bg-emerald-500/20 rounded-xl border border-emerald-400 text-emerald-300 shrink-0">
-                              <CheckCircle2 className="w-6 h-6 animate-bounce" />
-                            </div>
-                            <div className="min-w-0">
-                              <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider block">✓ Acesso Liberado</span>
-                              <h3 className="font-bold text-white text-base truncate">{lastMatchResult.name}</h3>
-                              <p className="text-xs text-emerald-200 font-mono truncate">{lastMatchResult.unit} • {lastMatchResult.type}</p>
-                            </div>
-                          </div>
-
-                          <div className="text-right shrink-0">
-                            <div className="text-[10px] text-emerald-300 uppercase font-mono">Pulso Relé Portão</div>
-                            <div className="text-lg font-extrabold text-emerald-400 font-mono">
-                              {pulseCountdown > 0 ? `${pulseCountdown}s` : 'ABERTO'}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Progress bar countdown */}
-                        <div className="w-full bg-emerald-950 rounded-full h-1.5 mt-3 overflow-hidden border border-emerald-800">
-                          <div className="bg-emerald-400 h-full w-full animate-pulse"></div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* GRANDE BANNER FLUTUANTE DE ERRO / RECUSA (VERMELHO ALERTA) */}
-                    {scanningStatus === 'denied' && lastMatchResult && (
-                      <div className="absolute inset-x-3 top-3 z-30 bg-red-950/95 border-2 border-red-500 shadow-2xl shadow-red-500/50 backdrop-blur-md p-4 rounded-2xl animate-in fade-in slide-in-from-top-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="p-2 bg-red-500/20 rounded-xl border border-red-400 text-red-300 shrink-0">
-                            <XCircle className="w-6 h-6 animate-pulse" />
-                          </div>
-                          <div className="min-w-0">
-                            <span className="text-[10px] uppercase font-bold text-red-400 tracking-wider block">✗ Acesso Negado</span>
-                            <h3 className="font-bold text-white text-base truncate">{lastMatchResult.name || 'Rosto Não Autorizado'}</h3>
-                            <p className="text-xs text-red-200 font-medium">{lastMatchResult.reason || 'Rosto Não Cadastrado neste Condomínio'}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
                   </div>
 
