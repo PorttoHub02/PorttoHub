@@ -159,7 +159,7 @@ export async function carregarEPreaquecerEncomendas(
         // 5. Itens Retidos (encomendas_itens)
         cachedQuery<any[]>({
           table: 'encomendas_itens',
-          select: 'id, condominio_id, lote_re_id, codigo_rastreio, codigo_barras, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, foto_etiqueta_url, assinatura_url, morador_id',
+          select: 'id, condominio_id, lote_re_id, codigo_rastreio, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, foto_etiqueta_url, assinatura_url, morador_id',
           filters: [
             { field: 'status', op: 'eq' as const, value: 'retido' },
             ...condoFiltros

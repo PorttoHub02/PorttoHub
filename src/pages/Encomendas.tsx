@@ -687,7 +687,7 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
       try {
         const rawItens = await cachedQuery<any[]>({
           table: 'encomendas_itens',
-          select: 'id, condominio_id, lote_re_id, codigo_rastreio, codigo_barras, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, foto_etiqueta_url, assinatura_url, morador_id',
+          select: 'id, condominio_id, lote_re_id, codigo_rastreio, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, foto_etiqueta_url, assinatura_url, morador_id',
           filters: [
             { field: 'status', op: 'eq' as const, value: 'retido' },
             ...condoFiltros
@@ -834,7 +834,7 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
       // 1. Tenta carregar os itens de encomendas com moradores usando projeção leve e paginação por range estritamente do condomínio ativo
       const query = supabase
         .from('encomendas_itens')
-        .select('id, condominio_id, lote_re_id, codigo_rastreio, codigo_barras, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, assinatura_url, moradores(nome, telefone, bloco, unidade)')
+        .select('id, condominio_id, lote_re_id, codigo_rastreio, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, assinatura_url, moradores(nome, telefone, bloco, unidade)')
         .eq('condominio_id', idCondo)
         .order('created_at', { ascending: false })
         .range(0, 49);
@@ -846,7 +846,7 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
         console.warn('Fallback simples para encomendas_itens no dossiê:', error?.message);
         const fallbackQuery = supabase
           .from('encomendas_itens')
-          .select('id, condominio_id, lote_re_id, codigo_rastreio, codigo_barras, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, assinatura_url')
+          .select('id, condominio_id, lote_re_id, codigo_rastreio, destinatario, bloco, unidade, status, local_armazenamento, data_recebimento, data_retirada, operador_entrada, operador_baixa, retirado_por, created_at, foto_etiqueta, assinatura_url')
           .eq('condominio_id', idCondo)
           .order('created_at', { ascending: false })
           .range(0, 49);
@@ -1768,14 +1768,23 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
         bloco: eEstruturaCasas ? 'Casa' : editPacoteBloco.trim(),
         morador_id: editPacoteMoradorId || null,
         codigo_barras: editPacoteCodigo.trim(),
+        codigo_rastreio: editPacoteCodigo.trim(),
         local_armazenamento: editPacoteLocal.trim(),
         observacoes: editPacoteObs.trim()
       };
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from('encomendas_itens')
         .update(payload)
         .eq('id', pacoteEmEdicao.id);
+
+      if (error && (error.code === '42703' || error.message?.includes('codigo_barras') || error.message?.includes('local_armazenamento'))) {
+        const payloadCompat: any = { ...payload };
+        if (error.message?.includes('codigo_barras')) delete payloadCompat.codigo_barras;
+        if (error.message?.includes('local_armazenamento')) delete payloadCompat.local_armazenamento;
+        const retry = await supabase.from('encomendas_itens').update(payloadCompat).eq('id', pacoteEmEdicao.id);
+        error = retry.error;
+      }
 
       if (error) throw error;
 
@@ -2130,6 +2139,7 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
           unidade: unidadeFinal,
           morador_id: moradorSelecionado?.id || null,
           codigo_barras: codigoBarras.trim(),
+          codigo_rastreio: codigoBarras.trim(),
           foto_etiqueta_url: formatarUrlFoto(fotoPrincipal),
           observacoes: observacoes.trim(),
           local_armazenamento: localArmazenar,
@@ -2142,6 +2152,7 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
           unidade: unidadeFinal,
           morador_id: adic.moradorId || moradorSelecionado?.id || null,
           codigo_barras: (adic.codigoBarras || '').trim(),
+          codigo_rastreio: (adic.codigoBarras || '').trim(),
           foto_etiqueta_url: formatarUrlFoto(adic.fotoEtiquetaUrl),
           observacoes: (adic.observacoes || '').trim(),
           local_armazenamento: localArmazenar,
@@ -2154,10 +2165,10 @@ export default function Encomendas({ usuarioLogado }: EncomendasProps) {
         .insert(pacotesParaSalvar)
         .select();
 
-      // Fallback seguro caso a coluna local_armazenamento ainda não exista no Supabase
-      if (itemErr && (itemErr.message?.includes('local_armazenamento') || (itemErr as any).code === '42703' || itemErr.message?.includes('schema cache'))) {
+      // Fallback seguro caso a coluna local_armazenamento ou codigo_barras ainda não exista no Supabase
+      if (itemErr && (itemErr.message?.includes('local_armazenamento') || itemErr.message?.includes('codigo_barras') || (itemErr as any).code === '42703' || itemErr.message?.includes('schema cache'))) {
         console.warn('[INFPORT] Coluna não encontrada no Supabase. Salvando pacote(s) em modo de compatibilidade...');
-        const semCamposNovos = pacotesParaSalvar.map(({ local_armazenamento, ...rest }) => rest);
+        const semCamposNovos = pacotesParaSalvar.map(({ local_armazenamento, codigo_barras, ...rest }) => rest);
         const retry = await supabase.from('encomendas_itens').insert(semCamposNovos).select();
         itemErr = retry.error;
         itensInseridos = retry.data;

@@ -118,6 +118,11 @@ export async function cachedQuery<T = any[]>(options: CachedQueryOptions): Promi
       if (options.filters) {
         for (const f of options.filters) {
           if (!f.field || f.value === undefined) continue;
+          // Prevenção contra 22P02: não aplicar filtros de igualdade em UUID com sentinelas não-UUID
+          const isUuidField = f.field === 'id' || f.field === 'condominio_id' || f.field.endsWith('_id');
+          if (isUuidField && (f.value === 'todos' || f.value === 'global' || f.value === 'TODOS' || f.value === '')) {
+            continue;
+          }
           if (f.op === 'eq') q = q.eq(f.field, f.value);
           else if (f.op === 'neq') q = q.neq(f.field, f.value);
           else if (f.op === 'in') q = q.in(f.field, Array.isArray(f.value) ? f.value : [f.value]);
@@ -135,8 +140,51 @@ export async function cachedQuery<T = any[]>(options: CachedQueryOptions): Promi
         q = q.limit(options.limit);
       }
 
-      const { data, error } = await q;
+      let { data, error } = await q;
+
+      // Auto-recuperação resiliente para erro 42703 (coluna inexistente no schema)
+      if (error && (error.code === '42703' || String(error.message || '').includes('does not exist'))) {
+        console.warn(`[Cache Fallback] Coluna inexistente na tabela "${options.table}" (${error.message}). Retentando com select('*')...`);
+        let retryQ = supabase.from(options.table).select('*');
+        if (options.filters) {
+          for (const f of options.filters) {
+            if (!f.field || f.value === undefined) continue;
+            const isUuidField = f.field === 'id' || f.field === 'condominio_id' || f.field.endsWith('_id');
+            if (isUuidField && (f.value === 'todos' || f.value === 'global' || f.value === 'TODOS' || f.value === '')) {
+              continue;
+            }
+            if (f.op === 'eq') retryQ = retryQ.eq(f.field, f.value);
+            else if (f.op === 'neq') retryQ = retryQ.neq(f.field, f.value);
+            else if (f.op === 'in') retryQ = retryQ.in(f.field, Array.isArray(f.value) ? f.value : [f.value]);
+            else if (f.op === 'gte') retryQ = retryQ.gte(f.field, f.value);
+            else if (f.op === 'lte') retryQ = retryQ.lte(f.field, f.value);
+            else if (f.op === 'ilike') retryQ = retryQ.ilike(f.field, `%${f.value}%`);
+          }
+        }
+        if (options.orderBy) {
+          retryQ = retryQ.order(options.orderBy.field, { ascending: options.orderBy.ascending ?? true });
+        }
+        if (options.limit) {
+          retryQ = retryQ.limit(options.limit);
+        }
+        const retryRes = await retryQ;
+        if (!retryRes.error) {
+          data = retryRes.data;
+          error = null;
+        }
+      }
+
       if (error) throw error;
+
+      // Normaliza campos intercambiáveis para encomendas_itens
+      if (Array.isArray(data) && options.table === 'encomendas_itens') {
+        data.forEach((it: any) => {
+          if (it) {
+            if (it.codigo_rastreio && !it.codigo_barras) it.codigo_barras = it.codigo_rastreio;
+            if (it.codigo_barras && !it.codigo_rastreio) it.codigo_rastreio = it.codigo_barras;
+          }
+        });
+      }
 
       const dadosFinais = (data || []) as T;
       clientMemoryCache.set(clientKey, {
@@ -146,17 +194,21 @@ export async function cachedQuery<T = any[]>(options: CachedQueryOptions): Promi
       });
       return dadosFinais;
     } catch (supErr: any) {
-      // Trata amigavelmente quando o banco é recém-criado e aguarda a execução do script SQL inicial
+      // Trata amigavelmente quando o banco é recém-criado, coluna ausente ou erro de sintaxe UUID
       if (
         supErr?.code === 'PGRST205' ||
         supErr?.code === '42P01' ||
+        supErr?.code === '22P02' ||
+        supErr?.code === '42703' ||
         String(supErr?.message || '').includes('PGRST205') ||
-        String(supErr?.message || '').includes('schema cache')
+        String(supErr?.message || '').includes('schema cache') ||
+        String(supErr?.message || '').includes('invalid input syntax for type uuid') ||
+        String(supErr?.message || '').includes('does not exist')
       ) {
         console.warn(
-          `[Supabase Setup] Tabela "${options.table}" aguarda execução do schema SQL no Supabase (${supErr?.code || 'PGRST205'}). Utilizando fallback seguro.`
+          `[Supabase Setup/Compatibilidade] Tabela "${options.table}" (${supErr?.code || 'AVISO'}): ${supErr?.message || 'Consulta adaptada'}. Utilizando fallback seguro.`
         );
-        if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined' && (supErr?.code === 'PGRST205' || supErr?.code === '42P01')) {
           window.dispatchEvent(
             new CustomEvent('supabase:schema_pendente', {
               detail: { table: options.table, code: supErr?.code || 'PGRST205' }

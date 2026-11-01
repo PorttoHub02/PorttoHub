@@ -998,7 +998,7 @@ export default function Configuracoes({ usuarioLogado, onConfigSalva }: Configur
         templatesData,
         agendaData
       ] = await Promise.all([
-        targetCondoId && targetCondoId !== 'TODOS' 
+        targetCondoId && targetCondoId !== 'TODOS' && targetCondoId !== 'todos' && targetCondoId !== 'global' && isUUID(targetCondoId)
           ? supabase.from('condominios').select('*').eq('id', targetCondoId).then(r => r.data || [])
           : supabase.from('condominios').select('*').then(r => r.data || []),
         buscarTabela('operadores'),

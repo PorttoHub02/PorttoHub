@@ -1,50 +1,72 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  ArrowRightLeft, 
-  Database, 
-  CheckCircle2, 
-  AlertCircle, 
-  RefreshCw, 
-  Upload, 
-  FileCode, 
-  Copy, 
-  Check, 
-  Server, 
-  ShieldCheck, 
-  Layers, 
-  Download, 
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import {
+  Database,
+  Server,
+  ArrowRightLeft,
+  ShieldAlert,
+  CheckCircle2,
+  XCircle,
   AlertTriangle,
+  Play,
+  RefreshCw,
+  Trash2,
+  Plus,
+  Terminal,
+  Layers,
+  FileText,
+  Cpu,
+  Eye,
+  CheckSquare,
+  Square,
+  X,
+  Download,
+  Upload,
+  Copy,
+  Maximize2,
+  Minimize2,
+  Search,
+  Filter,
+  ShieldCheck,
   Zap,
   Info,
-  Edit2,
-  Plus,
   RotateCcw,
-  Save,
-  Key,
-  Globe,
   Sparkles,
-  Trash2
+  ExternalLink,
+  Pause,
+  AlertCircle,
+  Edit3,
+  Save,
+  EyeOff
 } from 'lucide-react';
-import { 
-  MIGRATION_TABLES, 
-  MigrationTableInfo, 
-  testSupabaseConnection, 
-  getSupabaseRowCount, 
-  executeFullSupabaseMigration, 
-  importJsonDump, 
-  generateSupabaseDumpSqlScript,
-  exportSourceDatabaseToJson,
+
+import {
+  MIGRATION_TABLES,
+  MigrationTableInfo,
+  SupabaseCredentials,
+  executeFullSupabaseMigration,
+  executeSingleTableMigration,
+  testConnectionLatency,
   limparBancoDestinoCompleto,
-  BancoPredefinido,
-  BANCOS_PADRAO,
-  carregarBancosPredefinidos,
-  salvarBancosPredefinidos,
+  exportSourceDatabaseToJson,
+  importJsonDump,
+  generateSupabaseDumpSqlScript,
+  getSupabaseRowCount,
   cleanApiKey,
   normalizeSupabaseUrl
 } from '../services/migrationSupabaseService';
-import { purgarCachesLocaisInfport } from '../services/cacheLimpezaService';
-import { obterSupabaseUrl, supabase } from '../services/supabase';
+
+import {
+  ConnectionProfile,
+  TableMigrationModel,
+  PORTTOHUB_CORE_TABLES_SCHEMA,
+  carregarConexoesArmazenadas,
+  salvarConexoesArmazenadas,
+  carregarMapeamentosArmazenados,
+  salvarMapeamentosArmazenados,
+  resetarConexoesPadrao
+} from '../services/migrationSchemaData';
+
+import { supabase } from '../services/supabase';
 
 interface ModalMigracaoSupabaseProps {
   aberto: boolean;
@@ -52,1394 +74,1962 @@ interface ModalMigracaoSupabaseProps {
   onMigracaoConcluida?: () => void;
 }
 
+interface LogEntry {
+  id: number;
+  timestamp: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+}
+
 export default function ModalMigracaoSupabase({
   aberto,
   onFechar,
   onMigracaoConcluida
 }: ModalMigracaoSupabaseProps) {
-  const [metodo, setMetodo] = useState<'direto' | 'arquivo' | 'script_sql'>('direto');
+  // Navigation State
+  const [activeTab, setActiveTab] = useState<'conexoes' | 'esquemas' | 'mapeamento' | 'migracao' | 'ferramentas' | 'logs'>('conexoes');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Gerenciador de Botões / Bancos Predefinidos Editáveis
-  const [bancos, setBancos] = useState<BancoPredefinido[]>(() => carregarBancosPredefinidos());
-  const [bancoSelecionadoId, setBancoSelecionadoId] = useState<string>('caetano_infport');
-  const [modoEdicaoNome, setModoEdicaoNome] = useState<boolean>(false);
-  const [nomeEditando, setNomeEditando] = useState<string>('B.D caetano_infport');
-  const [feedbackBotao, setFeedbackBotao] = useState<{ tipo: 'sucesso' | 'info'; texto: string } | null>(null);
+  // Connections State
+  const [connections, setConnections] = useState<ConnectionProfile[]>(() => carregarConexoesArmazenadas());
+  const [selectedSourceId, setSelectedSourceId] = useState<string>('caetano_infport');
+  const [selectedTargetId, setSelectedTargetId] = useState<string>('porttohub_supabase_novo');
 
-  // Método 1: Conexão direta com valores iniciais carregados do banco selecionado
-  const [supabaseUrl, setSupabaseUrl] = useState<string>(() => {
-    const defaultBanco = BANCOS_PADRAO.find(b => b.id === 'caetano_infport') || BANCOS_PADRAO[0];
-    return defaultBanco.url;
+  const [isAddingConnection, setIsAddingConnection] = useState(false);
+  const [newConnName, setNewConnName] = useState('');
+  const [newConnType, setNewConnType] = useState<'source' | 'target' | 'both'>('source');
+  const [newConnUrl, setNewConnUrl] = useState('');
+  const [newConnKey, setNewConnKey] = useState('');
+  const [newConnDesc, setNewConnDesc] = useState('');
+  const [testandoConexaoId, setTestandoConexaoId] = useState<string | null>(null);
+
+  // Editing & Card Management State
+  const [editingConnId, setEditingConnId] = useState<string | null>(null);
+  const [editConnForm, setEditConnForm] = useState<{
+    name: string;
+    type: 'source' | 'target' | 'both';
+    url: string;
+    key: string;
+    description: string;
+  }>({ name: '', type: 'source', url: '', key: '', description: '' });
+  const [showKeyConnId, setShowKeyConnId] = useState<Record<string, boolean>>({});
+  const [connParaExcluir, setConnParaExcluir] = useState<ConnectionProfile | null>(null);
+  const [copiadoTexto, setCopiadoTexto] = useState<string | null>(null);
+
+  // Active Connection Pair
+  const activeSource = useMemo(() => {
+    return connections.find(c => c.id === selectedSourceId) || connections.find(c => c.type === 'source' || c.type === 'both') || connections[0];
+  }, [connections, selectedSourceId]);
+
+  const activeTarget = useMemo(() => {
+    return connections.find(c => c.id === selectedTargetId) || connections.find(c => c.type === 'target' || c.type === 'both') || connections[1] || connections[0];
+  }, [connections, selectedTargetId]);
+
+  // Tables & Schemas State
+  const [tables, setTables] = useState<TableMigrationModel[]>(() => {
+    const savedMappings = carregarMapeamentosArmazenados();
+    return PORTTOHUB_CORE_TABLES_SCHEMA.map(t => ({
+      ...t,
+      mapping: savedMappings[t.name] || t.mapping || {}
+    }));
   });
-  const [supabaseKey, setSupabaseKey] = useState<string>(() => {
-    const defaultBanco = BANCOS_PADRAO.find(b => b.id === 'caetano_infport') || BANCOS_PADRAO[0];
-    return defaultBanco.key;
-  });
-  const [testandoConexao, setTestandoConexao] = useState(false);
-  const [statusConexao, setStatusConexao] = useState<{
-    testado: boolean;
-    sucesso: boolean;
-    mensagem: string;
-    projectRef?: string;
-  }>({ testado: false, sucesso: false, mensagem: '' });
 
-  // Backup dos Dados de Origem
-  const [baixandoBackup, setBaixandoBackup] = useState(false);
+  const [tabelaFiltroBusca, setTabelaFiltroBusca] = useState('');
+  const [categoriaAtiva, setCategoriaAtiva] = useState<string>('todas');
+  const [escaneandoContagens, setEscaneandoContagens] = useState(false);
+  const [tabelaExpandidaId, setTabelaExpandidaId] = useState<string | null>(null);
+
+  // Migration Execution State
+  const [migrationStatus, setMigrationStatus] = useState<'idle' | 'running' | 'completed' | 'error'>('idle');
+  const [progress, setProgress] = useState(0);
+  const [currentTableMigrating, setCurrentTableMigrating] = useState('');
+  const [currentBatchInfo, setCurrentBatchInfo] = useState('');
+  const [totalMigradosSessao, setTotalMigradosSessao] = useState(0);
+  const [modoSimulacao, setModoSimulacao] = useState(false);
   const [salvarBackupAntes, setSalvarBackupAntes] = useState(true);
-  const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const [limparDestinoAntes, setLimparDestinoAntes] = useState(false);
+  const [escopoCondominio, setEscopoCondominio] = useState<string>('todos');
+  const [condominiosDestino, setCondominiosDestino] = useState<Array<{ id: string; nome: string }>>([]);
 
-  // Limpeza Prévia Completa do Banco Novo e Isolamento de Condomínios
-  const [limparBancoAntes, setLimparBancoAntes] = useState(true);
-  const [limpezaStatus, setLimpezaStatus] = useState<string | null>(null);
-  const [limpandoManual, setLimpandoManual] = useState(false);
-  const [modalConfirmacaoLimpeza, setModalConfirmacaoLimpeza] = useState(false);
-  const [textoConfirmacaoLimpeza, setTextoConfirmacaoLimpeza] = useState('');
-  const [erroConfirmacaoLimpeza, setErroConfirmacaoLimpeza] = useState<string | null>(null);
-  const [escopoCondominioMigracao, setEscopoCondominioMigracao] = useState<string>('todos');
-  const [listaCondominios, setListaCondominios] = useState<Array<{ id: string; nome: string }>>([]);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Carrega condomínios cadastrados no banco de destino
+  // Reset Modal State
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+
+  // Tool / Dumps State
+  const [dumpJsonCopiado, setDumpJsonCopiado] = useState(false);
+  const [sqlCopiado, setSqlCopiado] = useState(false);
+  const [importandoJson, setImportandoJson] = useState(false);
+  const [arquivoUploadNome, setArquivoUploadNome] = useState('');
+
+  // Terminal Logs State
+  const [logs, setLogs] = useState<LogEntry[]>([
+    { id: 1, timestamp: new Date().toLocaleTimeString(), type: 'info', message: 'Sistema de Migração Oficial Supabase PorttoHub v2.6 Enterprise inicializado.' },
+    { id: 2, timestamp: new Date().toLocaleTimeString(), type: 'success', message: 'Instâncias oficiais conectadas e prontas para sincronização.' }
+  ]);
+  const [filtroTipoLog, setFiltroTipoLog] = useState<'all' | 'info' | 'success' | 'warning' | 'error'>('all');
+  const [buscaLog, setBuscaLog] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  const logScrollRef = useRef<HTMLDivElement>(null);
+
+  // Esc key listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showResetModal) {
+          setShowResetModal(false);
+        } else if (aberto && migrationStatus !== 'running') {
+          onFechar();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [aberto, showResetModal, migrationStatus, onFechar]);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (autoScroll && logScrollRef.current) {
+      logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
+
+  // Carrega lista de condomínios cadastrados no banco de destino
   useEffect(() => {
     if (aberto) {
       supabase.from('condominios').select('id, nome').order('nome').then(({ data }) => {
         if (data && Array.isArray(data)) {
-          setListaCondominios(data);
+          setCondominiosDestino(data);
         }
       });
     }
   }, [aberto]);
 
-  // Tabelas e Estado de Migração
-  const [tabelas, setTabelas] = useState<MigrationTableInfo[]>(() =>
-    MIGRATION_TABLES.map(t => ({
-      ...t,
-      status: 'idle',
-      migratedCount: 0
-    }))
-  );
-  const [escaneando, setEscaneando] = useState(false);
-  const [migrando, setMigrando] = useState(false);
-  const [progressoGeral, setProgressoGeral] = useState({ totalTabelas: 0, concluidas: 0, registrosMigrados: 0 });
-  const [resultadoFinal, setResultadoFinal] = useState<{
-    sucesso: boolean;
-    total: number;
-    mensagem: string;
-  } | null>(null);
-
-  // Método 2: Arquivo JSON
-  const [jsonTexto, setJsonTexto] = useState('');
-  const [arquivoNome, setArquivoNome] = useState('');
-  const [importandoJson, setImportandoJson] = useState(false);
-  const [progressoJson, setProgressoJson] = useState({ tabelaAtual: '', salvos: 0, total: 0 });
-  const [resultadoJson, setResultadoJson] = useState<{
-    sucesso: boolean;
-    total: number;
-    detalhes?: Record<string, number>;
-    erros?: string[];
-  } | null>(null);
-
-  // Método 3: Script SQL
-  const [sqlCopiado, setSqlCopiado] = useState(false);
-  const scriptSql = generateSupabaseDumpSqlScript();
-
-  if (!aberto) return null;
-
-  // Ações de gerenciamento dos Botões Predefinidos
-  const handleSelecionarBanco = (banco: BancoPredefinido) => {
-    setBancoSelecionadoId(banco.id);
-    setNomeEditando(banco.nome);
-    setSupabaseUrl(banco.url);
-    setSupabaseKey(banco.key);
-    setStatusConexao({ testado: false, sucesso: false, mensagem: '' });
-    setFeedbackBotao({
-      tipo: 'info',
-      texto: `Botão "${banco.nome}" selecionado! Os campos de URL e Chave foram preenchidos e continuam 100% editáveis.`
-    });
-    setTimeout(() => setFeedbackBotao(null), 3500);
-  };
-
-  const handleSalvarModificacaoBotao = () => {
-    if (!bancoSelecionadoId) return;
-
-    const novosBancos = bancos.map(b => {
-      if (b.id === bancoSelecionadoId) {
-        return {
-          ...b,
-          nome: (nomeEditando || b.nome).trim(),
-          url: supabaseUrl.trim(),
-          key: cleanApiKey(supabaseKey)
-        };
+  // Salva mapeamentos sempre que forem alterados
+  useEffect(() => {
+    const mapToSave: Record<string, Record<string, string>> = {};
+    for (const t of tables) {
+      if (t.mapping && Object.keys(t.mapping).length > 0) {
+        mapToSave[t.name] = t.mapping;
       }
-      return b;
-    });
-
-    setBancos(novosBancos);
-    salvarBancosPredefinidos(novosBancos);
-    setModoEdicaoNome(false);
-    setFeedbackBotao({
-      tipo: 'sucesso',
-      texto: `✓ Alterações gravadas no botão "${nomeEditando}"! Suas correções foram salvas e lembradas neste dispositivo.`
-    });
-    setTimeout(() => setFeedbackBotao(null), 4000);
-  };
-
-  const handleCriarNovoBotao = () => {
-    const idNovo = `banco_${Date.now()}`;
-    const nomeNovo = `Banco Customizado ${bancos.length + 1}`;
-    const novoBanco: BancoPredefinido = {
-      id: idNovo,
-      nome: nomeNovo,
-      url: supabaseUrl.trim() || 'https://',
-      key: cleanApiKey(supabaseKey),
-      descricao: 'Banco customizado configurado pelo usuário'
-    };
-
-    const novos = [...bancos, novoBanco];
-    setBancos(novos);
-    salvarBancosPredefinidos(novos);
-    setBancoSelecionadoId(idNovo);
-    setNomeEditando(nomeNovo);
-    setModoEdicaoNome(true);
-    setFeedbackBotao({
-      tipo: 'sucesso',
-      texto: `Novo botão "${nomeNovo}" adicionado com sucesso!`
-    });
-    setTimeout(() => setFeedbackBotao(null), 3500);
-  };
-
-  const handleRestaurarPadroes = () => {
-    setBancos(BANCOS_PADRAO);
-    salvarBancosPredefinidos(BANCOS_PADRAO);
-    const primeiro = BANCOS_PADRAO[0];
-    handleSelecionarBanco(primeiro);
-    setFeedbackBotao({
-      tipo: 'info',
-      texto: '✓ Botões restaurados para os bancos oficiais padrão (B.D caetano_infport e banco de dados PorttoHub).'
-    });
-    setTimeout(() => setFeedbackBotao(null), 3500);
-  };
-
-  // 1. Testa Conexão com o Supabase de Origem
-  const handleTestarConexao = async () => {
-    const urlLimpa = normalizeSupabaseUrl(supabaseUrl);
-    const keyLimpa = cleanApiKey(supabaseKey);
-
-    if (!urlLimpa || !keyLimpa) {
-      setStatusConexao({
-        testado: true,
-        sucesso: false,
-        mensagem: 'Por favor, informe a URL e a API Key do banco de origem.'
-      });
-      return;
     }
+    salvarMapeamentosArmazenados(mapToSave);
+  }, [tables]);
 
-    setTestandoConexao(true);
-    setStatusConexao({ testado: false, sucesso: false, mensagem: '' });
+  // Salva conexões sempre que forem alteradas
+  useEffect(() => {
+    salvarConexoesArmazenadas(connections);
+  }, [connections]);
+
+  const addLog = (message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const time = new Date().toLocaleTimeString();
+    setLogs(prev => [...prev, { id: Date.now() + Math.random(), timestamp: time, type, message }]);
+  };
+
+  // Testa conexão com medição de latência real
+  const handleTestarConexao = async (connId: string) => {
+    const conn = connections.find(c => c.id === connId);
+    if (!conn) return;
+
+    setTestandoConexaoId(connId);
+    addLog(`Testando conexão com "${conn.name}" (${conn.url})...`, 'info');
 
     try {
-      const res = await testSupabaseConnection({ url: urlLimpa, key: keyLimpa });
-      setStatusConexao({
-        testado: true,
-        sucesso: res.success,
-        mensagem: res.message,
-        projectRef: res.projectRef
+      const res = await testConnectionLatency({
+        url: normalizeSupabaseUrl(conn.url),
+        key: cleanApiKey(conn.key)
       });
 
       if (res.success) {
-        // Escaneia contagem das tabelas automaticamente
-        handleEscanearTabelas(urlLimpa, keyLimpa);
+        addLog(`Conexão confirmada com "${conn.name}"! Ref: ${res.projectRef || 'ok'} • Ping: ${res.latencyMs}ms`, 'success');
+        setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'connected', latencyMs: res.latencyMs, lastChecked: new Date().toLocaleTimeString() } : c));
+      } else {
+        addLog(`Falha na conexão com "${conn.name}": ${res.message}`, 'error');
+        setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'error', lastChecked: new Date().toLocaleTimeString() } : c));
       }
-    } finally {
-      setTestandoConexao(false);
-    }
-  };
-
-  // 2. Escaneia contagem de linhas de cada tabela no Supabase
-  const handleEscanearTabelas = async (urlOverride?: string, keyOverride?: string) => {
-    const creds = {
-      url: urlOverride || normalizeSupabaseUrl(supabaseUrl),
-      key: keyOverride || cleanApiKey(supabaseKey)
-    };
-
-    setEscaneando(true);
-    const atualizadas = [...tabelas];
-
-    for (let i = 0; i < atualizadas.length; i++) {
-      const tab = atualizadas[i];
-      tab.status = 'checking';
-      setTabelas([...atualizadas]);
-
-      try {
-        const { count, exists, error } = await getSupabaseRowCount(creds, tab.name);
-        tab.count = count;
-        tab.status = exists ? (count > 0 ? 'idle' : 'empty') : 'error';
-        if (error) tab.error = error;
-      } catch (err: any) {
-        tab.status = 'error';
-        tab.error = err.message;
-      }
-
-      setTabelas([...atualizadas]);
-    }
-
-    setEscaneando(false);
-  };
-
-  // 3. Salva Cópia de Segurança em JSON dos Dados de Origem
-  const handleBaixarBackupOrigem = async () => {
-    const creds = {
-      url: normalizeSupabaseUrl(supabaseUrl),
-      key: cleanApiKey(supabaseKey)
-    };
-
-    if (!creds.url || !creds.key) {
-      setStatusConexao({
-        testado: true,
-        sucesso: false,
-        mensagem: 'Por favor, informe a URL e a API Key do banco de origem antes de baixar o backup.'
-      });
-      return;
-    }
-
-    setBaixandoBackup(true);
-    setBackupStatus('Conectando ao banco de origem para extrair todos os dados...');
-
-    try {
-      const res = await exportSourceDatabaseToJson(
-        creds,
-        tabelas.map(t => t.name),
-        (tabela, registros, idx, total) => {
-          setBackupStatus(`Extraindo tabela ${idx}/${total}: ${tabela} (${registros} registros)...`);
-        }
-      );
-
-      setBackupStatus(`✓ Sucesso! Arquivo "${res.fileName}" baixado (${res.totalRecords} registros salvos localmente no seu computador).`);
     } catch (err: any) {
-      setBackupStatus(`Erro ao salvar backup de origem: ${err.message || String(err)}`);
+      addLog(`Erro ao testar "${conn.name}": ${err.message || String(err)}`, 'error');
+      setConnections(prev => prev.map(c => c.id === connId ? { ...c, status: 'error' } : c));
     } finally {
-      setBaixandoBackup(false);
+      setTestandoConexaoId(null);
     }
   };
 
-  // Executa limpeza manual imediata do banco de dados novo com confirmação
-  const handleExecutarLimpezaManual = async () => {
-    if (textoConfirmacaoLimpeza.trim().toUpperCase() !== 'CONFIRMAR LIMPEZA') {
-      setErroConfirmacaoLimpeza('Digite exatamente "CONFIRMAR LIMPEZA" para prosseguir.');
+  // Inverter par Origem / Destino
+  const handleInverterPar = () => {
+    const temp = selectedSourceId;
+    setSelectedSourceId(selectedTargetId);
+    setSelectedTargetId(temp);
+    addLog('Pares de migração invertidos: Origem e Destino foram alternados.', 'warning');
+  };
+
+  // Adicionar Conexão
+  const handleAddConnection = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newConnName || !newConnUrl || !newConnKey) return;
+
+    const newEntry: ConnectionProfile = {
+      id: `conn_${Date.now()}`,
+      name: newConnName.trim(),
+      type: newConnType,
+      url: normalizeSupabaseUrl(newConnUrl),
+      key: cleanApiKey(newConnKey),
+      description: newConnDesc.trim() || undefined,
+      status: 'untested'
+    };
+
+    setConnections(prev => [...prev, newEntry]);
+    setNewConnName('');
+    setNewConnUrl('');
+    setNewConnKey('');
+    setNewConnDesc('');
+    setIsAddingConnection(false);
+
+    addLog(`Nova conexão "${newEntry.name}" salva com sucesso (${newEntry.type}).`, 'success');
+  };
+
+  // Iniciar Edição de Conexão
+  const handleStartEditConnection = (conn: ConnectionProfile) => {
+    setEditingConnId(conn.id);
+    setEditConnForm({
+      name: conn.name,
+      type: conn.type,
+      url: conn.url,
+      key: conn.key,
+      description: conn.description || ''
+    });
+    addLog(`Modo de edição ativado para o banco "${conn.name}".`, 'info');
+  };
+
+  // Salvar Edição de Conexão ("Atualizar Banco Repositório")
+  const handleSaveEditConnection = (connId: string) => {
+    if (!editConnForm.name.trim() || !editConnForm.url.trim() || !editConnForm.key.trim()) {
+      addLog('Aviso: Preencha o Nome, URL e Chave API para atualizar o banco.', 'error');
       return;
     }
-    setErroConfirmacaoLimpeza(null);
-    setLimpandoManual(true);
-    setLimpezaStatus('Iniciando exclusão de todas as 28 tabelas no banco de dados novo...');
+
+    const updatedUrl = normalizeSupabaseUrl(editConnForm.url);
+    const updatedKey = cleanApiKey(editConnForm.key);
+
+    setConnections(prev => prev.map(c => {
+      if (c.id === connId) {
+        return {
+          ...c,
+          name: editConnForm.name.trim(),
+          type: editConnForm.type,
+          url: updatedUrl,
+          key: updatedKey,
+          description: editConnForm.description.trim() || undefined,
+          status: 'untested',
+          lastChecked: undefined,
+          latencyMs: undefined
+        };
+      }
+      return c;
+    }));
+
+    setEditingConnId(null);
+    addLog(`Banco repositório "${editConnForm.name.trim()}" atualizado com sucesso!`, 'success');
+  };
+
+  const handleCancelEditConnection = () => {
+    setEditingConnId(null);
+  };
+
+  // Confirmar Exclusão de Conexão (Sem restrições)
+  const handleConfirmDeleteConnection = (id: string) => {
+    const conn = connections.find(c => c.id === id);
+    if (!conn) return;
+
+    setConnections(prev => {
+      const remaining = prev.filter(c => c.id !== id);
+      // Se a conexão removida era a ativa, redireciona
+      if (selectedSourceId === id && remaining.length > 0) {
+        const nextSrc = remaining.find(c => c.type === 'source' || c.type === 'both') || remaining[0];
+        setSelectedSourceId(nextSrc.id);
+      }
+      if (selectedTargetId === id && remaining.length > 0) {
+        const nextTgt = remaining.find(c => c.type === 'target' || c.type === 'both') || remaining[0];
+        setSelectedTargetId(nextTgt.id);
+      }
+      return remaining;
+    });
+
+    setConnParaExcluir(null);
+    addLog(`Banco de dados "${conn.name}" excluído do repositório.`, 'warning');
+  };
+
+  // Restaurar Bancos Padrão do Repositório
+  const handleRestaurarPadroes = () => {
+    const resetados = resetarConexoesPadrao();
+    setConnections(resetados);
+    setSelectedSourceId('caetano_infport');
+    setSelectedTargetId('porttohub_supabase_novo');
+    addLog('Bancos de dados originais do repositório restaurados com sucesso!', 'success');
+  };
+
+  // Alternar visibilidade da chave
+  const toggleShowKey = (connId: string) => {
+    setShowKeyConnId(prev => ({ ...prev, [connId]: !prev[connId] }));
+  };
+
+  // Copiar texto para o clipboard com feedback
+  const handleCopiarTexto = (texto: string, label: string) => {
+    navigator.clipboard.writeText(texto);
+    setCopiadoTexto(label);
+    setTimeout(() => setCopiadoTexto(null), 2500);
+    addLog(`${label} copiado para a área de transferência.`, 'info');
+  };
+
+  // Escanear contagem real nas bases de dados
+  const handleEscanearContagens = async () => {
+    if (!activeSource) return;
+    setEscaneandoContagens(true);
+    addLog(`Escaneando volumetria e contagem de registros no banco de origem (${activeSource.name})...`, 'info');
+
+    const creds: SupabaseCredentials = {
+      url: activeSource.url,
+      key: activeSource.key
+    };
+
+    let totalContado = 0;
+    const novosTables = [...tables];
+
+    for (let i = 0; i < novosTables.length; i++) {
+      const t = novosTables[i];
+      try {
+        const res = await getSupabaseRowCount(creds, t.name);
+        const count = res?.count || 0;
+        t.recordsCount = count;
+        totalContado += count;
+      } catch {
+        t.recordsCount = 0;
+      }
+    }
+
+    setTables(novosTables);
+    setEscaneandoContagens(false);
+    addLog(`Varredura concluída! Total identificado: ${totalContado.toLocaleString('pt-BR')} registros distribuídos em ${novosTables.length} tabelas.`, 'success');
+  };
+
+  // Toggle seleção de tabela
+  const toggleTableSelection = (id: string) => {
+    setTables(prev => prev.map(t => t.id === id ? { ...t, selected: !t.selected } : t));
+  };
+
+  const handleSelecionarTodas = (marcar: boolean) => {
+    setTables(prev => prev.map(t => ({ ...t, selected: marcar })));
+    addLog(marcar ? 'Todas as tabelas foram selecionadas para migração.' : 'Seleção de tabelas desmarcada.', 'info');
+  };
+
+  // Atualizar mapeamento de coluna
+  const handleColumnMappingChange = (tableId: string, sourceCol: string, targetCol: string) => {
+    setTables(prev => prev.map(t => {
+      if (t.id === tableId) {
+        const novoMapping = { ...t.mapping };
+        if (targetCol === '(ignorar)') {
+          novoMapping[sourceCol] = '(ignorar)';
+        } else {
+          novoMapping[sourceCol] = targetCol;
+        }
+        return {
+          ...t,
+          mapping: novoMapping
+        };
+      }
+      return t;
+    }));
+    addLog(`Mapeamento atualizado: ${sourceCol} ➔ ${targetCol}`, 'info');
+  };
+
+  // Auto mapear colunas similares
+  const handleAutoMapearTabela = (tableId: string) => {
+    setTables(prev => prev.map(t => {
+      if (t.id === tableId) {
+        const autoMap: Record<string, string> = { ...t.mapping };
+        for (const src of t.sourceColumns) {
+          const match = t.targetColumns.find(tgt => 
+            tgt.name.toLowerCase() === src.name.toLowerCase() ||
+            tgt.name.replace(/_/g, '') === src.name.replace(/_/g, '')
+          );
+          if (match) {
+            autoMap[src.name] = match.name;
+          }
+        }
+        return { ...t, mapping: autoMap };
+      }
+      return t;
+    }));
+    addLog(`Mapeamento heurístico aplicado para a tabela ID ${tableId}.`, 'success');
+  };
+
+  // Executar limpeza do banco de destino
+  const executeDatabaseReset = async () => {
+    if (resetConfirmText !== 'ZERAR DESTINO') return;
+    setIsResetting(true);
+    addLog('AVISO CRÍTICO: Iniciando limpeza estruturada (TRUNCATE/RESET) do banco de destino...', 'warning');
 
     try {
-      const res = await limparBancoDestinoCompleto((tab, idx, total) => {
-        setLimpezaStatus(`Excluindo dados da tabela ${idx}/${total}: ${tab}...`);
+      const res = await limparBancoDestinoCompleto((tabela, idx, total) => {
+        addLog(`Limpando tabela [${idx}/${total}]: ${tabela}...`, 'info');
       });
 
       if (res.sucesso) {
-        purgarCachesLocaisInfport();
-        setLimpezaStatus(`✓ Sucesso! O banco de dados novo foi 100% limpo (${res.totalRemovidos} registros removidos de ${res.tabelasLimpas.length} tabelas). Condomínios, operadores, encomendas e moradores anteriores foram zerados. Todos os caches locais foram purgados.`);
-        setModalConfirmacaoLimpeza(false);
-        setTextoConfirmacaoLimpeza('');
-        setListaCondominios([]);
-        if (onMigracaoConcluida) {
-          onMigracaoConcluida();
-        }
+        addLog(`Banco de destino limpo com sucesso! ${res.tabelasLimpas.length} tabelas zeradas sem violação relacional.`, 'success');
       } else {
-        setErroConfirmacaoLimpeza(`Aviso: ${res.erros.join('; ')}`);
+        addLog(`Limpeza finalizada com avisos: ${res.erros.join(', ')}`, 'warning');
       }
-    } catch (e: any) {
-      setErroConfirmacaoLimpeza(`Erro na limpeza: ${e.message || String(e)}`);
+    } catch (err: any) {
+      addLog(`Erro ao limpar banco de destino: ${err.message || String(err)}`, 'error');
     } finally {
-      setLimpandoManual(false);
+      setIsResetting(false);
+      setShowResetModal(false);
+      setResetConfirmText('');
     }
   };
 
-  // 4. Executa a Migração Completa
-  const handleIniciarMigracao = async () => {
-    if (!statusConexao.sucesso) {
-      alert('Por favor, teste e valide a conexão com o Supabase de origem antes de iniciar a migração.');
+  // Cancelar migração em andamento
+  const handleCancelarMigracao = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      addLog('Comando de parada recebido. Interrompendo migração com segurança...', 'warning');
+    }
+  };
+
+  // Iniciar migração completa ou isolada
+  const startMigration = async (tableId: string | null = null) => {
+    if (!activeSource || !activeTarget) {
+      addLog('Erro: Selecione uma instância válida de Origem e de Destino.', 'error');
       return;
     }
 
-    const creds = {
-      url: normalizeSupabaseUrl(supabaseUrl),
-      key: cleanApiKey(supabaseKey)
+    const abortCtrl = new AbortController();
+    abortControllerRef.current = abortCtrl;
+
+    setMigrationStatus('running');
+    setProgress(0);
+    setTotalMigradosSessao(0);
+
+    const tablesToMigrate = tableId
+      ? tables.filter(t => t.id === tableId)
+      : tables.filter(t => t.selected);
+
+    if (tablesToMigrate.length === 0) {
+      addLog('Nenhuma tabela selecionada para migração.', 'warning');
+      setMigrationStatus('idle');
+      return;
+    }
+
+    const tableNames = tablesToMigrate.map(t => t.name);
+    addLog(`Iniciando migração de ${tableNames.length} módulo(s) [${modoSimulacao ? 'MODO SIMULAÇÃO DRY-RUN' : 'MODO PRODUÇÃO REAL'}]...`, 'info');
+
+    // Compila mapa de custom mappings
+    const customMappings: Record<string, Record<string, string>> = {};
+    for (const t of tablesToMigrate) {
+      if (t.mapping && Object.keys(t.mapping).length > 0) {
+        customMappings[t.name] = t.mapping;
+      }
+    }
+
+    const sourceCreds: SupabaseCredentials = {
+      url: activeSource.url,
+      key: activeSource.key
     };
 
-    setMigrando(true);
-    setResultadoFinal(null);
-    setLimpezaStatus(null);
-    setProgressoGeral({ totalTabelas: tabelas.length, concluidas: 0, registrosMigrados: 0 });
+    const targetCreds: SupabaseCredentials = {
+      url: activeTarget.url,
+      key: activeTarget.key
+    };
 
     try {
-      let concluidas = 0;
-      let totalSalvos = 0;
+      if (tableId) {
+        // Migração isolada de um módulo
+        const singleTable = tablesToMigrate[0];
+        setCurrentTableMigrating(singleTable.name);
+        setCurrentBatchInfo(`Migrando ${singleTable.name}...`);
+        addLog(`Iniciando extração e inserção isolada da tabela "${singleTable.name}"...`, 'info');
 
-      const res = await executeFullSupabaseMigration(
-        creds,
-        tabelas.map(t => t.name),
-        (updatedTable) => {
-          setTabelas(prev =>
-            prev.map(t => (t.name === updatedTable.name ? updatedTable : t))
-          );
-          if (updatedTable.status === 'completed' || updatedTable.status === 'empty') {
-            concluidas++;
-            totalSalvos += updatedTable.migratedCount;
-            setProgressoGeral({
-              totalTabelas: tabelas.length,
-              concluidas,
-              registrosMigrados: totalSalvos
-            });
-          }
-        },
-        {
-          salvarBackupAntes,
-          limparBancoAntes,
-          targetCondominioId: escopoCondominioMigracao,
-          onBackupProgresso: (msg) => setBackupStatus(msg),
-          onLimpezaProgresso: (msg) => setLimpezaStatus(msg)
+        const result = await executeSingleTableMigration(sourceCreds, singleTable.name, (saved, total) => {
+          const pct = Math.round((saved / Math.max(total, 1)) * 100);
+          setProgress(pct);
+          setCurrentBatchInfo(`${saved}/${total} registros processados`);
+        }, {
+          customColumnMappings: customMappings,
+          targetCondominioId: escopoCondominio,
+          dryRun: modoSimulacao,
+          targetCredentials: targetCreds,
+          abortSignal: abortCtrl.signal
+        });
+
+        if (result.success) {
+          setProgress(100);
+          setTotalMigradosSessao(result.count);
+          setMigrationStatus('completed');
+          addLog(`Módulo "${singleTable.name}" migrado com sucesso! Total: ${result.count} registros gravados.`, 'success');
+          if (onMigracaoConcluida) onMigracaoConcluida();
+        } else {
+          setMigrationStatus('error');
+          addLog(`Erro ao migrar módulo "${singleTable.name}": ${result.error}`, 'error');
         }
-      );
+      } else {
+        // Migração completa de todos os módulos selecionados
+        let tabelasConcluidas = 0;
+        const totalTabelas = tablesToMigrate.length;
 
-      setResultadoFinal({
-        sucesso: true,
-        total: res.totalMigrated,
-        mensagem: `✓ Migração finalizada com sucesso! ${res.totalMigrated} registros foram gravados no banco de dados PorttoHub com total integridade e sem mistura de dados.`
-      });
+        const res = await executeFullSupabaseMigration(
+          sourceCreds,
+          tableNames,
+          (tableInfo: MigrationTableInfo) => {
+            setCurrentTableMigrating(tableInfo.name);
+            if (tableInfo.status === 'migrating') {
+              setCurrentBatchInfo(`Processando lote: ${tableInfo.migratedCount} inseridos`);
+            } else if (tableInfo.status === 'completed' || tableInfo.status === 'empty') {
+              tabelasConcluidas++;
+              const overallPct = Math.round((tabelasConcluidas / totalTabelas) * 100);
+              setProgress(overallPct);
+              addLog(`Tabela "${tableInfo.name}": ${tableInfo.migratedCount} registros processados (${tableInfo.status}).`, 'success');
+            } else if (tableInfo.status === 'error') {
+              tabelasConcluidas++;
+              addLog(`Erro na tabela "${tableInfo.name}": ${tableInfo.error || 'Falha de validação'}`, 'error');
+            }
+          },
+          {
+            salvarBackupAntes,
+            limparBancoAntes: limparDestinoAntes,
+            targetCondominioId: escopoCondominio,
+            customColumnMappings: customMappings,
+            dryRun: modoSimulacao,
+            targetCredentials: targetCreds,
+            abortSignal: abortCtrl.signal,
+            onBackupProgresso: (msg) => addLog(msg, 'info'),
+            onLimpezaProgresso: (msg) => addLog(msg, 'warning')
+          }
+        );
 
-      if (onMigracaoConcluida) {
-        onMigracaoConcluida();
+        setProgress(100);
+        setTotalMigradosSessao(res.totalMigrated);
+        setMigrationStatus('completed');
+        addLog(`MIGRAÇÃO CONCLUÍDA! ${res.totalMigrated} registros transferidos para o banco de destino com 100% de integridade.`, 'success');
+        if (onMigracaoConcluida) onMigracaoConcluida();
       }
     } catch (err: any) {
-      setResultadoFinal({
-        sucesso: false,
-        total: 0,
-        mensagem: `Erro crítico na migração: ${err.message || String(err)}`
-      });
+      setMigrationStatus('error');
+      addLog(`Falha na execução: ${err.message || String(err)}`, 'error');
     } finally {
-      setMigrando(false);
+      setCurrentTableMigrating('');
+      setCurrentBatchInfo('');
+      abortControllerRef.current = null;
     }
   };
 
-  // 5. Manipula upload de arquivo JSON
-  const handleUploadArquivo = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Exportar Backup JSON direto
+  const handleBaixarBackupJson = async () => {
+    if (!activeSource) return;
+    addLog('Gerando arquivo JSON com dump estruturado de todas as tabelas...', 'info');
+    try {
+      const res = await exportSourceDatabaseToJson({
+        url: activeSource.url,
+        key: activeSource.key
+      });
+      addLog(`Backup JSON concluído! Arquivo "${res.fileName}" baixado (${res.totalRecords} registros).`, 'success');
+    } catch (err: any) {
+      addLog(`Erro ao baixar backup JSON: ${err.message || String(err)}`, 'error');
+    }
+  };
+
+  // Importar Backup JSON do disco
+  const handleUploadArquivoJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setArquivoNome(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const conteudo = event.target?.result as string;
-      setJsonTexto(conteudo);
-    };
-    reader.readAsText(file);
-  };
-
-  // 6. Executa a Importação do JSON
-  const handleImportarJson = async () => {
-    if (!jsonTexto.trim()) {
-      alert('Por favor, carregue um arquivo JSON ou cole o conteúdo no campo de texto.');
-      return;
-    }
-
+    setArquivoUploadNome(file.name);
     setImportandoJson(true);
-    setResultadoJson(null);
-    setLimpezaStatus(null);
+    addLog(`Lendo arquivo de dump "${file.name}"...`, 'info');
 
     try {
-      const res = await importJsonDump(
-        jsonTexto, 
-        (tabela, salvos, total) => {
-          setProgressoJson({ tabelaAtual: tabela, salvos, total });
-        },
-        {
-          limparBancoAntes,
-          targetCondominioId: escopoCondominioMigracao,
-          onLimpezaProgresso: (msg) => setLimpezaStatus(msg)
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const content = event.target?.result as string;
+        try {
+          const parsed = JSON.parse(content);
+          addLog('Arquivo validado com sucesso! Iniciando restauração no banco de destino...', 'info');
+
+          const res = await importJsonDump(parsed, (tabela, salvos, total) => {
+            setCurrentTableMigrating(tabela);
+            setCurrentBatchInfo(`${salvos}/${total}`);
+          }, {
+            targetCondominioId: escopoCondominio
+          });
+
+          if (res.success) {
+            addLog(`Dump JSON restaurado com sucesso! Total de ${res.totalImported} registros gravados no banco.`, 'success');
+          } else {
+            addLog(`Importação finalizada com erros: ${res.errors.join(', ')}`, 'error');
+          }
+        } catch (err: any) {
+          addLog(`JSON inválido: ${err.message}`, 'error');
+        } finally {
+          setImportandoJson(false);
         }
-      );
-
-      setResultadoJson({
-        sucesso: res.success,
-        total: res.totalImported,
-        detalhes: res.summary,
-        erros: res.errors
-      });
-
-      if (res.totalImported > 0 && onMigracaoConcluida) {
-        onMigracaoConcluida();
-      }
+      };
+      reader.readAsText(file);
     } catch (err: any) {
-      setResultadoJson({
-        sucesso: false,
-        total: 0,
-        erros: [err.message || String(err)]
-      });
-    } finally {
+      addLog(`Erro ao processar arquivo: ${err.message}`, 'error');
       setImportandoJson(false);
     }
   };
 
+  // Copiar Script SQL de Extração
   const handleCopiarSql = () => {
-    navigator.clipboard.writeText(scriptSql);
+    const sql = generateSupabaseDumpSqlScript();
+    navigator.clipboard.writeText(sql);
     setSqlCopiado(true);
     setTimeout(() => setSqlCopiado(false), 3000);
+    addLog('Script SQL copiado para a área de transferência! Cole no SQL Editor do Supabase.', 'success');
   };
 
-  const totalRegistrosSupabase = tabelas.reduce((acc, t) => acc + (t.count || 0), 0);
-  const totalRegistrosMigrados = tabelas.reduce((acc, t) => acc + (t.migratedCount || 0), 0);
-  const bancoAtualObj = bancos.find(b => b.id === bancoSelecionadoId);
+  // Copiar Logs
+  const handleCopiarLogs = () => {
+    const text = logs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.message}`).join('\n');
+    navigator.clipboard.writeText(text);
+    addLog('Histórico de logs copiado para a área de transferência.', 'info');
+  };
+
+  // Baixar Logs em .txt
+  const handleBaixarLogs = () => {
+    const text = logs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.message}`).join('\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `porttohub-migracao-logs-${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addLog('Arquivo de logs baixado com sucesso.', 'info');
+  };
+
+  // Filtros de tabelas na Aba 2
+  const tabelasFiltradas = useMemo(() => {
+    return tables.filter(t => {
+      const matchBusca = t.name.toLowerCase().includes(tabelaFiltroBusca.toLowerCase()) ||
+        t.label.toLowerCase().includes(tabelaFiltroBusca.toLowerCase());
+      const matchCat = categoriaAtiva === 'todas' || t.category.toLowerCase() === categoriaAtiva.toLowerCase();
+      return matchBusca && matchCat;
+    });
+  }, [tables, tabelaFiltroBusca, categoriaAtiva]);
+
+  // Filtros de logs na Aba 6
+  const logsFiltrados = useMemo(() => {
+    return logs.filter(l => {
+      const matchTipo = filtroTipoLog === 'all' || l.type === filtroTipoLog;
+      const matchBusca = !buscaLog || l.message.toLowerCase().includes(buscaLog.toLowerCase());
+      return matchTipo && matchBusca;
+    });
+  }, [logs, filtroTipoLog, buscaLog]);
+
+  // Estatísticas Rápidas
+  const totalTabelasSelecionadas = tables.filter(t => t.selected).length;
+  const totalRegistrosEstimados = tables.reduce((acc, t) => acc + (t.selected ? t.recordsCount : 0), 0);
+
+  if (!aberto) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 bg-black/70 backdrop-blur-xs overflow-y-auto">
-      <div className="relative w-full max-w-5xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94vh]">
+    <div className={`fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-0 ${isFullscreen ? 'p-0' : 'p-2 sm:p-4 md:p-6'}`}>
+      
+      {/* CONTAINER PRINCIPAL */}
+      <div className={`bg-slate-950 border border-slate-800 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-black shadow-2xl transition-all duration-300 overflow-hidden ${
+        isFullscreen ? 'w-screen h-screen rounded-none' : 'w-full max-w-7xl h-[94vh] rounded-3xl'
+      }`}>
         
-        {/* Cabeçalho Oficial do Migrador */}
-        <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-950 text-white p-5 sm:p-6 shrink-0 border-b border-slate-800">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-600/30 rounded-2xl border border-blue-400/30 shadow-inner">
-                <ArrowRightLeft className="w-7 h-7 text-blue-300" />
+        {/* HEADER / NAVBAR */}
+        <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md px-4 lg:px-6 py-3 flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="bg-emerald-500/10 p-2.5 rounded-2xl border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 shadow-lg shadow-emerald-500/10">
+              <ArrowRightLeft className="w-5 h-5 animate-pulse" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center space-x-2 flex-wrap">
+                <h1 className="font-bold text-base sm:text-lg text-white tracking-tight truncate">
+                  Módulo Migrador Oficial: Supabase
+                </h1>
+                <span className="text-[10px] uppercase font-bold tracking-wider bg-emerald-500/15 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                  v2.6 Enterprise
+                </span>
+                <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider bg-cyan-500/10 text-cyan-400 px-2 py-0.5 rounded-full border border-cyan-500/20">
+                  Multi-Tenant
+                </span>
               </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/30 text-blue-200 border border-blue-400/30">
-                    Menu Exclusivo de Configurações
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Supabase Ativo: banco de dados PorttoHub
-                  </span>
-                </div>
-                <h2 className="text-xl sm:text-2xl font-black tracking-tight mt-1 text-white">
-                  Migrador Oficial: Supabase Antigo &rarr; PorttoHub
-                </h2>
-                <p className="text-blue-200 text-xs sm:text-sm mt-0.5 max-w-2xl">
-                  Extração e transferência segura de condomínios, moradores, encomendas, fotos, chaves e históricos do banco antigo diretamente para o seu novo banco de dados Supabase.
-                </p>
-              </div>
+              <p className="text-xs text-slate-400 truncate">
+                Migração segura, visual e estruturada entre instâncias Supabase
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
+            {/* Botão Destrutivo de Zerar Banco Destino */}
+            <button
+              onClick={() => setShowResetModal(true)}
+              className="flex items-center space-x-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 px-3 py-1.5 rounded-xl text-xs font-semibold transition"
+              title="Limpeza total controlada do banco de destino"
+            >
+              <ShieldAlert className="w-4 h-4" />
+              <span className="hidden sm:inline">Zerar Banco Destino</span>
+            </button>
+
+            {/* Status de Conexão Ativa */}
+            <div className="hidden md:flex items-center bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1 text-xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping mr-2"></span>
+              <span className="text-slate-300 font-mono text-[11px] truncate max-w-[130px]">
+                {activeSource?.name || 'Origem Ativa'}
+              </span>
             </div>
 
+            {/* Botão de Tela Cheia */}
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition"
+              title={isFullscreen ? 'Restaurar Tamanho' : 'Expandir Tela Cheia'}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+
+            {/* Botão Fechar Modal */}
             <button
               onClick={onFechar}
-              disabled={migrando || importandoJson || baixandoBackup}
-              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
-              title="Fechar Migrador"
+              disabled={migrationStatus === 'running'}
+              className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition disabled:opacity-40"
+              title="Fechar (Esc)"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
+        </header>
 
-          {/* Abas dos 3 Métodos */}
-          <div className="flex flex-wrap items-center gap-2 mt-5 pt-3 border-t border-white/15">
-            <button
-              type="button"
-              onClick={() => setMetodo('direto')}
-              className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                metodo === 'direto'
-                  ? 'bg-white text-blue-900 shadow-md'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <Zap className="w-4 h-4 text-amber-300" />
-              Método 1: Conexão Direta (1-Clique)
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMetodo('arquivo')}
-              className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                metodo === 'arquivo'
-                  ? 'bg-white text-blue-900 shadow-md'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <Upload className="w-4 h-4 text-teal-300" />
-              Método 2: Importar Arquivo JSON
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMetodo('script_sql')}
-              className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                metodo === 'script_sql'
-                  ? 'bg-white text-blue-900 shadow-md'
-                  : 'bg-white/10 text-white hover:bg-white/20'
-              }`}
-            >
-              <FileCode className="w-4 h-4 text-purple-300" />
-              Método 3: Script SQL Supabase
-            </button>
-          </div>
-        </div>
-
-        {/* Corpo do Modal com Scroll */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-5 flex-1 bg-slate-50/70">
-
-          {/* Banner de Destino Fixo: banco de dados PorttoHub */}
-          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap shadow-xs">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="p-2.5 bg-emerald-600 text-white rounded-xl shrink-0 shadow-xs">
-                <Database className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider block">
-                    Banco de Dados Atual (Destino)
-                  </span>
-                  <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.2 rounded-md">
-                    banco de dados PorttoHub
-                  </span>
-                </div>
-                <span className="text-xs sm:text-sm font-mono font-bold text-emerald-950 truncate block mt-0.5">
-                  {obterSupabaseUrl()}
-                </span>
-              </div>
+        {/* CONTAINER DE CONTEÚDO (SIDEBAR + MAIN) */}
+        <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
+          
+          {/* SIDEBAR TABS */}
+          <aside className="w-full lg:w-64 border-b lg:border-b-0 lg:border-r border-slate-800 bg-slate-900/50 p-3 lg:p-4 flex flex-row lg:flex-col space-x-1 lg:space-x-0 lg:space-y-1.5 overflow-x-auto lg:overflow-x-visible shrink-0">
+            <div className="hidden lg:block text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-3 pb-2">
+              Menu de Operação
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-2xs">
-                <CheckCircle2 className="w-4 h-4" /> Pronto para Gravação
+            
+            <button
+              onClick={() => setActiveTab('conexoes')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'conexoes'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <Server className="w-4 h-4 shrink-0" />
+              <span>1. Conexões Supabase</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('esquemas')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'esquemas'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <Eye className="w-4 h-4 shrink-0" />
+              <span>2. Esquemas & Tabelas</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('mapeamento')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'mapeamento'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-4 h-4 shrink-0" />
+              <span>3. Mapeamento de Colunas</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('migracao')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'migracao'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <Play className="w-4 h-4 shrink-0" />
+              <span>4. Painel de Migração</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('ferramentas')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'ferramentas'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <FileText className="w-4 h-4 shrink-0" />
+              <span>5. Ferramentas & Dumps</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('logs')}
+              className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition whitespace-nowrap ${
+                activeTab === 'logs'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <Terminal className="w-4 h-4 shrink-0" />
+              <span>Logs & Atividades</span>
+              <span className="ml-auto bg-slate-800 text-slate-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
+                {logs.length}
               </span>
-            </div>
-          </div>
+            </button>
 
-          {/* Feedback de ações dos botões */}
-          {feedbackBotao && (
-            <div className={`p-3 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
-              feedbackBotao.tipo === 'sucesso'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                : 'bg-blue-50 text-blue-800 border-blue-200'
-            }`}>
-              <Info className="w-4 h-4 shrink-0" />
-              <span>{feedbackBotao.texto}</span>
+            {/* Status card lateral */}
+            <div className="hidden lg:block pt-4 mt-auto">
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3.5 text-xs space-y-2">
+                <div className="flex items-center space-x-2 text-emerald-400 font-semibold">
+                  <Cpu className="w-4 h-4" />
+                  <span>Status do Sistema</span>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Modo de migração otimizado por lotes ativado. Auto-cura de esquemas e proteção referencial.
+                </p>
+                <div className="pt-1 flex items-center justify-between text-[10px] text-slate-500">
+                  <span>Batch: 50 rows</span>
+                  <span className="text-emerald-400">PostgreSQL 15+</span>
+                </div>
+              </div>
             </div>
-          )}
+          </aside>
 
-          {/* MÉTODO 1: CONEXÃO DIRETA */}
-          {metodo === 'direto' && (
-            <div className="space-y-5">
-              
-              {/* Card de Configuração e Botões Predefinidos Editáveis */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                
-                {/* Cabeçalho da Seção de Botões */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-2 text-slate-800 font-bold text-sm sm:text-base">
-                    <Server className="w-5 h-5 text-blue-600" />
-                    <span>Passo 1: Selecione ou Edite o Banco de Origem</span>
+          {/* MAIN CONTENT AREA */}
+          <main className="flex-1 p-4 lg:p-6 overflow-y-auto">
+
+            {/* TAB 1: CONEXÕES SUPABASE */}
+            {activeTab === 'conexoes' && (
+              <div className="space-y-6 max-w-5xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Gerenciamento de Bancos de Dados Supabase</h2>
+                    <p className="text-xs sm:text-sm text-slate-400">Configure as instâncias de origem (antiga) e destino (nova).</p>
                   </div>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    Clique no botão para carregar dados ou edite os campos abaixo livremente
-                  </span>
+                  <div className="flex items-center space-x-2 shrink-0 flex-wrap">
+                    <button
+                      onClick={handleRestaurarPadroes}
+                      className="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition cursor-pointer"
+                      title="Restaurar conexões originais do repositório"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Restaurar Repositório</span>
+                    </button>
+                    <button
+                      onClick={() => setIsAddingConnection(!isAddingConnection)}
+                      className="flex items-center space-x-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition shadow-lg shadow-emerald-500/10 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{isAddingConnection ? 'Fechar Formulário' : 'Nova Conexão'}</span>
+                    </button>
+                  </div>
                 </div>
 
-                {/* BOTÕES PREDEFINIDOS SOLICITADOS PELO USUÁRIO (TOTALMENTE EDITÁVEIS) */}
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-[11px] font-black uppercase text-slate-600 tracking-wider flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                      Botões de Acesso Rápido a Bancos de Dados:
+                {/* Seletor do Par Ativo de Migração */}
+                <div className="bg-slate-900/70 border border-slate-800 p-4 sm:p-5 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      Par Ativo de Migração
                     </span>
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <button
-                        type="button"
-                        onClick={handleCriarNovoBotao}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
-                        title="Adicionar um novo botão de banco"
+                    <button
+                      onClick={handleInverterPar}
+                      className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 transition"
+                      title="Alternar Origem e Destino"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      <span>Inverter Pares</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-semibold uppercase text-amber-400">
+                        Banco de Origem (Cedente)
+                      </label>
+                      <select
+                        value={selectedSourceId}
+                        onChange={(e) => setSelectedSourceId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-amber-400"
                       >
-                        <Plus className="w-3 h-3 text-emerald-600" /> Novo Botão
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleRestaurarPadroes}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg font-semibold text-[11px] flex items-center gap-1 transition cursor-pointer"
-                        title="Restaurar botões padrão originais"
+                        {connections.filter(c => c.type === 'source' || c.type === 'both').map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} — {c.url}
+                          </option>
+                        ))}
+                      </select>
+                      {activeSource && (
+                        <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1">
+                          <span className="font-mono text-amber-400/90 truncate">{activeSource.url}</span>
+                          <button
+                            onClick={() => handleTestarConexao(activeSource.id)}
+                            className="text-amber-400 hover:underline shrink-0"
+                          >
+                            Testar Origem
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-semibold uppercase text-emerald-400">
+                        Banco de Destino (Receptor)
+                      </label>
+                      <select
+                        value={selectedTargetId}
+                        onChange={(e) => setSelectedTargetId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
                       >
-                        <RotateCcw className="w-3 h-3 text-slate-500" /> Restaurar Padrões
-                      </button>
+                        {connections.filter(c => c.type === 'target' || c.type === 'both').map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} — {c.url}
+                          </option>
+                        ))}
+                      </select>
+                      {activeTarget && (
+                        <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1">
+                          <span className="font-mono text-emerald-400/90 truncate">{activeTarget.url}</span>
+                          <button
+                            onClick={() => handleTestarConexao(activeTarget.id)}
+                            className="text-emerald-400 hover:underline shrink-0"
+                          >
+                            Testar Destino
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
+                </div>
 
-                  {/* Lista de Botões de Banco de Dados */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {bancos.map((b) => {
-                      const isSelected = bancoSelecionadoId === b.id;
-                      const isCaetano = b.id === 'caetano_infport' || b.nome.toLowerCase().includes('caetano');
-                      const isPorttoHub = b.id === 'porttohub_novo' || b.nome.toLowerCase().includes('porttohub');
+                {/* Formulário para Adicionar Conexão */}
+                {isAddingConnection && (
+                  <div className="bg-slate-900 border border-emerald-500/40 p-5 sm:p-6 rounded-2xl space-y-4 shadow-xl animate-in fade-in duration-200">
+                    <h3 className="font-bold text-white text-sm sm:text-base flex items-center gap-2">
+                      <Plus className="w-4 h-4 text-emerald-400" />
+                      Adicionar Nova Conexão Supabase
+                    </h3>
+                    <form onSubmit={handleAddConnection} className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 mb-1">Nome da Conexão</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Ex: Supabase Staging"
+                            value={newConnName}
+                            onChange={(e) => setNewConnName(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 mb-1">Função / Tipo</label>
+                          <select
+                            value={newConnType}
+                            onChange={(e) => setNewConnType(e.target.value as any)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                          >
+                            <option value="source">Origem (Banco Antigo)</option>
+                            <option value="target">Destino (Banco Novo PorttoHub)</option>
+                            <option value="both">Ambos (Origem ou Destino)</option>
+                          </select>
+                        </div>
+                      </div>
 
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Supabase Project URL</label>
+                        <input
+                          type="url"
+                          required
+                          placeholder="https://xyzproject.supabase.co"
+                          value={newConnUrl}
+                          onChange={(e) => setNewConnUrl(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">
+                          API Key / Service Role Key (Recomendado para permissões totais)
+                        </label>
+                        <input
+                          type="password"
+                          required
+                          placeholder="eyJhbGciOi..."
+                          value={newConnKey}
+                          onChange={(e) => setNewConnKey(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Descrição Opcional</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Backup com dados legados de 2025"
+                          value={newConnDesc}
+                          onChange={(e) => setNewConnDesc(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="flex justify-end space-x-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddingConnection(false)}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition"
+                        >
+                          Salvar Conexão
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+
+                {/* Lista de Conexões Cadastradas */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {connections.map(conn => {
+                    const isTesting = testandoConexaoId === conn.id;
+                    const isEditing = editingConnId === conn.id;
+                    const isKeyVisible = Boolean(showKeyConnId[conn.id]);
+
+                    if (isEditing) {
                       return (
                         <div
-                          key={b.id}
-                          className={`p-3 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${
-                            isSelected
-                              ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
-                              : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-slate-300'
-                          }`}
+                          key={`edit-${conn.id}`}
+                          className="bg-slate-900 border-2 border-emerald-500/80 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl ring-2 ring-emerald-500/20 animate-in fade-in zoom-in-95 duration-150"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleSelecionarBanco(b)}
-                              className="text-left flex items-start gap-2.5 flex-1 cursor-pointer"
-                            >
-                              <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
-                                isCaetano 
-                                  ? 'bg-indigo-600 text-white' 
-                                  : isPorttoHub 
-                                  ? 'bg-emerald-600 text-white' 
-                                  : 'bg-slate-700 text-white'
-                              }`}>
-                                <Database className="w-4 h-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <strong className="text-xs sm:text-sm font-black text-slate-900 block truncate">
-                                    {b.nome}
-                                  </strong>
-                                  {isSelected && (
-                                    <span className="text-[10px] bg-blue-600 text-white font-bold px-1.5 py-0.2 rounded">
-                                      Ativo
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-[11px] font-mono text-slate-500 block truncate mt-0.5">
-                                  {b.url}
-                                </span>
-                              </div>
-                            </button>
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                            <div className="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+                              <Edit3 className="w-4 h-4" />
+                              <span>Editar Banco Repositório</span>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                              {conn.id}
+                            </span>
                           </div>
 
-                          <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px]">
-                            <span className="text-slate-400 truncate max-w-[200px]">
-                              {b.descricao || 'Banco Supabase'}
-                            </span>
+                          <div className="space-y-3 text-xs">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                                Nome do Banco / Projeto
+                              </label>
+                              <input
+                                type="text"
+                                value={editConnForm.name}
+                                onChange={(e) => setEditConnForm({ ...editConnForm, name: e.target.value })}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-medium"
+                                placeholder="Ex: Supabase Produção"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[11px] font-semibold text-slate-400 mb-1">Função / Tipo</label>
+                                <select
+                                  value={editConnForm.type}
+                                  onChange={(e) => setEditConnForm({ ...editConnForm, type: e.target.value as any })}
+                                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                                >
+                                  <option value="source">Origem (Banco Antigo)</option>
+                                  <option value="target">Destino (Novo Supabase PorttoHub)</option>
+                                  <option value="both">Ambos (Origem & Destino)</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[11px] font-semibold text-slate-400 mb-1">Descrição</label>
+                                <input
+                                  type="text"
+                                  value={editConnForm.description}
+                                  onChange={(e) => setEditConnForm({ ...editConnForm, description: e.target.value })}
+                                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                                  placeholder="Ex: Base legada"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Supabase Project URL</label>
+                              <input
+                                type="url"
+                                value={editConnForm.url}
+                                onChange={(e) => setEditConnForm({ ...editConnForm, url: e.target.value })}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+                                placeholder="https://xyz.supabase.co"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                                API Key / Service Role Key
+                              </label>
+                              <input
+                                type="text"
+                                value={editConnForm.key}
+                                onChange={(e) => setEditConnForm({ ...editConnForm, key: e.target.value })}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+                                placeholder="eyJhbGciOi..."
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-800">
                             <button
                               type="button"
-                              onClick={() => {
-                                handleSelecionarBanco(b);
-                                setModoEdicaoNome(true);
-                              }}
-                              className="text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 cursor-pointer"
-                              title="Editar nome deste botão"
+                              onClick={handleCancelEditConnection}
+                              className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer"
                             >
-                              <Edit2 className="w-3 h-3" /> Editar Nome
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditConnection(conn.id)}
+                              className="flex items-center space-x-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-4 py-1.5 rounded-xl text-xs font-bold transition shadow-md shadow-emerald-500/20 cursor-pointer"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              <span>Atualizar Banco Repositório</span>
                             </button>
                           </div>
                         </div>
                       );
-                    })}
-                  </div>
-                </div>
+                    }
 
-                {/* PAINEL DE CAMPOS EDITÁVEIS PARA O BANCO SELECIONADO */}
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3.5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-2.5">
-                    <div className="flex items-center gap-2">
-                      <Key className="w-4 h-4 text-slate-700" />
-                      <span className="text-xs font-bold text-slate-800 uppercase tracking-tight">
-                        Configurações do Banco Selecionado: {bancoAtualObj?.nome || 'Banco Ativo'}
-                      </span>
-                    </div>
-
-                    {/* Botão de Salvar Alterações no Botão */}
-                    <button
-                      type="button"
-                      onClick={handleSalvarModificacaoBotao}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
-                      title="Salva as alterações de URL, Chave ou Nome neste botão permanentemente"
-                    >
-                      <Save className="w-3.5 h-3.5" /> Salvar Alterações Neste Botão
-                    </button>
-                  </div>
-
-                  {modoEdicaoNome && (
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Nome do Botão:
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={nomeEditando}
-                          onChange={(e) => setNomeEditando(e.target.value)}
-                          placeholder="Ex: B.D caetano_infport"
-                          className="flex-1 px-3 py-2 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 bg-white font-semibold"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setModoEdicaoNome(false)}
-                          className="px-3 py-2 text-xs bg-slate-200 hover:bg-slate-300 rounded-xl font-bold text-slate-700 cursor-pointer"
-                        >
-                          Concluir Nome
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                        <Globe className="w-3.5 h-3.5 text-slate-500" />
-                        API URL do Supabase Antigo (Totalmente Editável):
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="https://pkemipwowkcnstbazlma.supabase.co"
-                        value={supabaseUrl}
-                        onChange={(e) => {
-                          setSupabaseUrl(e.target.value);
-                          setStatusConexao({ testado: false, sucesso: false, mensagem: '' });
-                        }}
-                        disabled={migrando || testandoConexao}
-                        className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 bg-white font-mono text-slate-900 shadow-2xs"
-                      />
-                      <span className="text-[10px] text-slate-500 mt-1 block">
-                        Aceita URL padrão (ex: https://...supabase.co) ou terminada com /rest/v1/
-                      </span>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                        <Key className="w-3.5 h-3.5 text-slate-500" />
-                        API Key (anon pública ou service_role - Editável):
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="Cole a chave anon ou service_role aqui..."
-                        value={supabaseKey}
-                        onChange={(e) => {
-                          setSupabaseKey(e.target.value);
-                          setStatusConexao({ testado: false, sucesso: false, mensagem: '' });
-                        }}
-                        disabled={migrando || testandoConexao}
-                        className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 bg-white font-mono text-slate-900 shadow-2xs"
-                      />
-                      <span className="text-[10px] text-slate-500 mt-1 block">
-                        Dica: Caso ocorra erro de autenticação (401), cole a chave service_role copiada do Supabase
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Ação de Teste de Conexão */}
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={handleTestarConexao}
-                      disabled={testandoConexao || migrando || !supabaseUrl || !supabaseKey}
-                      className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold flex items-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      {testandoConexao ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          Testando Conexão com o Supabase...
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="w-4 h-4 text-amber-300" />
-                          Testar Conexão & Escanear Tabelas
-                        </>
-                      )}
-                    </button>
-
-                    {statusConexao.testado && (
-                      <div className={`px-3.5 py-2 rounded-xl text-xs font-medium flex items-center gap-2 max-w-xl ${
-                        statusConexao.sucesso
-                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-2xs'
-                          : 'bg-rose-50 text-rose-800 border border-rose-300 shadow-2xs'
-                      }`}>
-                        {statusConexao.sucesso ? (
-                          <>
-                            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                            <span>{statusConexao.mensagem}</span>
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-                            <div className="min-w-0">
-                              <span className="font-bold block">{statusConexao.mensagem}</span>
-                              <span className="text-[11px] text-rose-700 mt-0.5 block">
-                                Para corrigir: Acesse seu projeto no Supabase &rarr; Project Settings &rarr; API &rarr; Copie a chave "anon" ou "service_role" e cole no campo acima, depois clique em "Salvar Alterações Neste Botão".
-                              </span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Card de Visão Geral das Tabelas e Execução da Migração */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm sm:text-base font-bold text-slate-800 flex items-center gap-2">
-                        <Layers className="w-5 h-5 text-indigo-600" />
-                        Passo 2: Mapeamento & Transferência das {tabelas.length} Tabelas
-                      </h3>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 flex items-center gap-1">
-                        <ShieldCheck className="w-3 h-3 text-indigo-600" /> Auto-Cura de Esquemas Ativa
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {statusConexao.sucesso
-                        ? `Detectados ${totalRegistrosSupabase} registros escaneados prontos para transferência para o banco de dados PorttoHub.`
-                        : 'Conecte ao Supabase acima para verificar quantos registros existem no seu banco de origem.'}
-                    </p>
-                  </div>
-
-                  {statusConexao.sucesso && (
-                    <button
-                      type="button"
-                      onClick={handleIniciarMigracao}
-                      disabled={migrando || escaneando}
-                      className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs sm:text-sm shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-all"
-                    >
-                      {migrando ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          Migrando ({progressoGeral.concluidas}/{progressoGeral.totalTabelas})...
-                        </>
-                      ) : (
-                        <>
-                          <ArrowRightLeft className="w-4 h-4" />
-                          Puxar e Migrar Todos os Dados Agora
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* Banner do Adaptador de Colunas e Esquemas */}
-                <div className="p-3 bg-gradient-to-r from-blue-50/80 to-indigo-50/80 border border-blue-200 rounded-xl text-xs flex items-start gap-2.5">
-                  <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                  <div className="text-blue-900 leading-relaxed">
-                    <strong>Adaptador Universal com Mapeamento Fino:</strong> Mapeia dados para as colunas reais do novo banco (<code>codigo_rastreio</code>, <code>destinatario</code>, <code>foto_etiqueta</code>, <code>codigo_chave</code>, <code>tempo_limite_horas</code>, <code>veiculos</code>, etc.) sem descarte indevido e preserva vínculos relacionais.
-                  </div>
-                </div>
-
-                {/* Prevenção de Mistura de Condomínios e Limpeza Prévia do Banco Novo */}
-                <div className="p-4 bg-gradient-to-r from-rose-50/90 via-red-50/60 to-slate-50 border-2 border-rose-300 rounded-2xl space-y-3.5 shadow-2xs">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="p-1.5 bg-rose-600 text-white rounded-lg shadow-2xs">
-                          <Trash2 className="w-4 h-4" />
-                        </span>
-                        <h4 className="text-xs sm:text-sm font-black uppercase text-rose-950 tracking-tight">
-                          Limpeza Prévia do Banco Novo & Isolamento de Condomínios
-                        </h4>
-                        <span className="text-[10px] bg-rose-600 text-white font-black px-2 py-0.5 rounded-full uppercase shadow-2xs">
-                          Evita Mistura de Dados
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-rose-900 leading-relaxed">
-                        Exclui previamente dados residuais de testes passados no banco novo (condomínios, operadores, moradores e encomendas) para que a importação seja gravada limpa, sem conflito de condomínios.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTextoConfirmacaoLimpeza('');
-                        setErroConfirmacaoLimpeza(null);
-                        setModalConfirmacaoLimpeza(true);
-                      }}
-                      disabled={migrando || limpandoManual}
-                      className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Excluir todos os registros do banco de destino ativo"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Limpar Banco Novo Agora</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 border-t border-rose-200/60">
-                    <label className="flex items-start gap-2.5 cursor-pointer select-none text-xs text-slate-800 font-semibold p-2.5 bg-white/90 rounded-xl border border-rose-200/80 hover:bg-white transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={limparBancoAntes}
-                        onChange={(e) => setLimparBancoAntes(e.target.checked)}
-                        disabled={migrando || limpandoManual}
-                        className="w-4 h-4 mt-0.5 text-rose-600 rounded border-slate-300 focus:ring-rose-500 cursor-pointer shrink-0"
-                      />
-                      <span>
-                        <strong className="block text-rose-950">Limpar banco novo antes de migrar (Reset Geral)</strong>
-                        <span className="text-[10px] text-slate-500 font-normal">Exclui cadastros antigos do banco destino antes de salvar os dados migrados, evitando duplicidade e misturas.</span>
-                      </span>
-                    </label>
-
-                    <div className="p-2.5 bg-white/90 rounded-xl border border-rose-200/80 space-y-1">
-                      <label className="block text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                        <Layers className="w-3.5 h-3.5 text-rose-600" />
-                        Direcionamento / Escopo do Condomínio:
-                      </label>
-                      <select
-                        value={escopoCondominioMigracao}
-                        onChange={(e) => setEscopoCondominioMigracao(e.target.value)}
-                        disabled={migrando || limpandoManual}
-                        className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-rose-500"
-                      >
-                        <option value="todos">🌐 Multicondomínio (Preservar divisão original de condomínios)</option>
-                        {listaCondominios.map(c => (
-                          <option key={c.id} value={c.id}>
-                            🏢 Vincular todos os dados ao condomínio: {c.nome}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  {limpezaStatus && (
-                    <div className="p-2.5 bg-rose-100/90 border border-rose-300 rounded-xl text-xs text-rose-950 font-bold flex items-center gap-2">
-                      <Info className="w-4 h-4 text-rose-700 shrink-0" />
-                      <span>{limpezaStatus}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Opções de Segurança e Backup dos Dados de Origem */}
-                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none font-medium text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={salvarBackupAntes}
-                        onChange={(e) => setSalvarBackupAntes(e.target.checked)}
-                        disabled={migrando || baixandoBackup}
-                        className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
-                      />
-                      <span>Salvar automaticamente cópia de segurança (backup .json) antes de gravar no novo banco</span>
-                    </label>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleBaixarBackupOrigem}
-                    disabled={baixandoBackup || migrando || !supabaseUrl || !supabaseKey}
-                    className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer disabled:opacity-50 shrink-0"
-                    title="Baixar arquivo JSON com todos os dados do banco de onde está puxando informações"
-                  >
-                    {baixandoBackup ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
-                        <span>Extraindo Backup...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-4 h-4 text-blue-600" />
-                        <span>Salvar Dados de Origem (Download JSON)</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {backupStatus && (
-                  <div className="px-3.5 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 flex items-center gap-2 font-medium">
-                    <Info className="w-4 h-4 text-indigo-600 shrink-0" />
-                    <span>{backupStatus}</span>
-                  </div>
-                )}
-
-                {/* Barra de Progresso Durante a Migração */}
-                {migrando && (
-                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
-                    <div className="flex justify-between text-xs font-semibold text-blue-900">
-                      <span>Progresso da Migração:</span>
-                      <span>
-                        {progressoGeral.concluidas} de {progressoGeral.totalTabelas} tabelas processadas ({totalRegistrosMigrados} registros salvos)
-                      </span>
-                    </div>
-                    <div className="w-full h-2.5 bg-blue-200 rounded-full overflow-hidden">
+                    return (
                       <div
-                        className="h-full bg-blue-600 transition-all duration-300"
-                        style={{
-                          width: `${(progressoGeral.concluidas / Math.max(progressoGeral.totalTabelas, 1)) * 100}%`
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
+                        key={conn.id}
+                        className={`bg-slate-900/50 border rounded-2xl p-4 sm:p-5 flex flex-col justify-between space-y-4 transition ${
+                          conn.id === selectedSourceId || conn.id === selectedTargetId
+                            ? 'border-emerald-500/50 bg-slate-900/80 shadow-md ring-1 ring-emerald-500/20'
+                            : 'border-slate-800/80 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center space-x-3 min-w-0">
+                            <div className={`p-2.5 rounded-xl border shrink-0 ${
+                              conn.type === 'source'
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            }`}>
+                              <Database className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-white text-sm truncate">{conn.name}</h3>
+                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-md border ${
+                                  conn.type === 'source'
+                                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                    : conn.type === 'target'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                    : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                                }`}>
+                                  {conn.type === 'source' ? 'Origem de Dados' : conn.type === 'target' ? 'Destino da Migração' : 'Origem & Destino'}
+                                </span>
+                                {conn.isDefault && (
+                                  <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded font-mono">Oficial</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
 
-                {/* Resultado Final */}
-                {resultadoFinal && (
-                  <div className={`p-4 rounded-xl border text-xs sm:text-sm font-medium flex items-center gap-2.5 ${
-                    resultadoFinal.sucesso
-                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                      : 'bg-rose-50 text-rose-800 border-rose-200'
-                  }`}>
-                    {resultadoFinal.sucesso ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                    ) : (
-                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-                    )}
-                    <span>{resultadoFinal.mensagem}</span>
-                  </div>
-                )}
+                          {/* Ações do Card: EDITAR e EXCLUIR */}
+                          <div className="flex items-center space-x-1 shrink-0">
+                            <button
+                              onClick={() => handleStartEditConnection(conn)}
+                              className="flex items-center space-x-1 text-slate-400 hover:text-emerald-400 p-1.5 hover:bg-slate-800 rounded-lg text-xs font-semibold transition cursor-pointer"
+                              title="Editar este banco de dados"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span className="text-[11px] hidden sm:inline">Editar</span>
+                            </button>
+                            <button
+                              onClick={() => setConnParaExcluir(conn)}
+                              className="flex items-center space-x-1 text-slate-400 hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg text-xs font-semibold transition cursor-pointer"
+                              title="Excluir banco do repositório"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span className="text-[11px] hidden sm:inline">Excluir</span>
+                            </button>
+                          </div>
+                        </div>
 
-                {/* Grade de Tabelas */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-[300px] overflow-y-auto p-1 border border-slate-100 rounded-xl bg-slate-50/70">
-                  {tabelas.map((tab) => (
-                    <div
-                      key={tab.name}
-                      className="p-2.5 bg-white border border-slate-200/80 rounded-xl flex items-center justify-between text-xs hover:border-slate-300 transition-colors"
-                    >
-                      <div className="min-w-0 pr-2">
-                        <div className="font-semibold text-slate-800 truncate">{tab.label}</div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono text-[10px] text-slate-400 truncate">{tab.name}</span>
-                          {tab.detalhesAdaptacao && (
-                            <span className="text-[9px] bg-blue-50 text-blue-700 border border-blue-200 px-1 py-0.2 rounded font-medium truncate" title={tab.detalhesAdaptacao}>
-                              {tab.detalhesAdaptacao}
+                        {conn.description && (
+                          <p className="text-xs text-slate-400 leading-tight">
+                            {conn.description}
+                          </p>
+                        )}
+
+                        <div className="space-y-1.5 text-xs bg-slate-950/80 p-3 rounded-xl border border-slate-900 font-mono">
+                          <div className="flex justify-between items-center text-slate-400 gap-2">
+                            <span className="text-[11px] shrink-0">URL:</span>
+                            <span className="text-slate-200 truncate max-w-[210px]" title={conn.url}>
+                              {conn.url}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopiarTexto(conn.url, 'URL Supabase')}
+                              className="text-slate-500 hover:text-white shrink-0 p-1 rounded hover:bg-slate-800"
+                              title="Copiar URL"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          </div>
+
+                          <div className="flex justify-between items-center text-slate-400 gap-2">
+                            <span className="text-[11px] shrink-0">Chave:</span>
+                            <span className="text-emerald-400 truncate max-w-[190px]">
+                              {isKeyVisible ? conn.key : '••••••••••••••••••••••••••••••••'}
+                            </span>
+                            <div className="flex items-center space-x-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => toggleShowKey(conn.id)}
+                                className="text-slate-500 hover:text-slate-300 p-1 rounded hover:bg-slate-800"
+                                title={isKeyVisible ? 'Ocultar Chave' : 'Visualizar Chave Completa'}
+                              >
+                                {isKeyVisible ? <EyeOff className="w-3 h-3 text-amber-400" /> : <Eye className="w-3 h-3" />}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopiarTexto(conn.key, 'Chave API')}
+                                className="text-slate-500 hover:text-white p-1 rounded hover:bg-slate-800"
+                                title="Copiar Chave API"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1">
+                          <button
+                            onClick={() => handleTestarConexao(conn.id)}
+                            disabled={isTesting}
+                            className="flex items-center space-x-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-xl border border-slate-700/60 transition disabled:opacity-50 cursor-pointer"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin text-emerald-400' : ''}`} />
+                            <span>{isTesting ? 'Testando...' : 'Testar Conexão'}</span>
+                          </button>
+
+                          {conn.latencyMs !== undefined && (
+                            <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                              Ping: {conn.latencyMs}ms
                             </span>
                           )}
                         </div>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {tab.status === 'migrating' && (
-                          <span className="flex items-center gap-1 text-blue-600 font-semibold text-[11px]">
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                            {tab.migratedCount}/{tab.count || '?'}
-                          </span>
-                        )}
+            {/* TAB 2: ESQUEMAS & TABELAS */}
+            {activeTab === 'esquemas' && (
+              <div className="space-y-6 max-w-6xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Visualização & Comparação de Esquemas</h2>
+                    <p className="text-xs sm:text-sm text-slate-400">Compare as colunas do banco de origem com o banco de destino em tempo real.</p>
+                  </div>
 
-                        {tab.status === 'completed' && (
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold flex items-center gap-0.5">
-                            <Check className="w-3 h-3" />
-                            {tab.migratedCount}
-                          </span>
-                        )}
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      onClick={handleEscanearContagens}
+                      disabled={escaneandoContagens}
+                      className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-700 transition disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${escaneandoContagens ? 'animate-spin' : ''}`} />
+                      <span>{escaneandoContagens ? 'Escaneando...' : 'Escanear Contagem Real'}</span>
+                    </button>
 
-                        {tab.status === 'empty' && (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[10px] font-medium">
-                            0 linhas
-                          </span>
-                        )}
+                    <div className="flex items-center space-x-1.5 text-xs text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
+                      <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                      <span>Divergências detectadas e adaptadas</span>
+                    </div>
+                  </div>
+                </div>
 
-                        {tab.status === 'checking' && (
-                          <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
-                        )}
+                {/* Filtro e Busca de Tabelas */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/50 p-3 rounded-2xl border border-slate-800">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-500" />
+                    <input
+                      type="text"
+                      placeholder="Filtrar tabela por nome (ex: encomendas, moradores)..."
+                      value={tabelaFiltroBusca}
+                      onChange={(e) => setTabelaFiltroBusca(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
 
-                        {tab.status === 'idle' && (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-medium">
-                            {tab.count !== undefined ? `${tab.count} itens` : '—'}
-                          </span>
-                        )}
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      onClick={() => handleSelecionarTodas(true)}
+                      className="text-xs text-slate-300 hover:text-white bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700"
+                    >
+                      Selecionar Todas
+                    </button>
+                    <button
+                      onClick={() => handleSelecionarTodas(false)}
+                      className="text-xs text-slate-400 hover:text-white bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                </div>
 
-                        {tab.status === 'error' && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[10px] font-medium" title={tab.error}>
-                            Falha
-                          </span>
+                {/* Lista de Tabelas e Esquemas */}
+                <div className="space-y-4">
+                  {tabelasFiltradas.map(table => {
+                    const isExpanded = tabelaExpandidaId === table.id;
+                    const hasCustomMapping = Object.keys(table.mapping || {}).length > 0;
+
+                    return (
+                      <div key={table.id} className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4 hover:border-slate-700/80 transition">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                          <div className="flex items-center space-x-3">
+                            <button
+                              onClick={() => toggleTableSelection(table.id)}
+                              className="text-emerald-400 hover:text-emerald-300 transition"
+                              title={table.selected ? 'Desmarcar da migração' : 'Marcar para migração'}
+                            >
+                              {table.selected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-600" />}
+                            </button>
+
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <h3 className="font-bold text-white text-sm sm:text-base">{table.label}</h3>
+                                <span className="text-xs font-mono text-slate-400">({table.name})</span>
+                                <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono">
+                                  {table.recordsCount.toLocaleString('pt-BR')} registros
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400">{table.description}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center space-x-2">
+                            <span className={`text-[11px] px-2.5 py-1 rounded-full border ${
+                              hasCustomMapping
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-medium'
+                                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-medium'
+                            }`}>
+                              {hasCustomMapping ? 'Mapeamento Personalizado Ativo' : 'Esquema Compatível'}
+                            </span>
+
+                            <button
+                              onClick={() => setTabelaExpandidaId(isExpanded ? null : table.id)}
+                              className="text-xs text-slate-400 hover:text-white bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700"
+                            >
+                              {isExpanded ? 'Recolher' : 'Ver Colunas'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Visão Lado a Lado de Colunas (Expandível) */}
+                        {isExpanded && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in duration-200">
+                            {/* Colunas de Origem */}
+                            <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-900 space-y-2">
+                              <div className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                                <span>Origem (Banco Antigo)</span>
+                                <span>{table.sourceColumns.length} colunas</span>
+                              </div>
+                              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                                {table.sourceColumns.map((col, idx) => (
+                                  <div key={idx} className="flex items-center justify-between text-xs bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="font-mono text-slate-200">{col.name}</span>
+                                      {col.primary && <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded">PK</span>}
+                                    </div>
+                                    <span className="font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded text-[11px]">{col.type}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Colunas de Destino */}
+                            <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-900 space-y-2">
+                              <div className="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                                <span>Destino (Novo Supabase PorttoHub)</span>
+                                <span>{table.targetColumns.length} colunas</span>
+                              </div>
+                              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                                {table.targetColumns.map((col, idx) => {
+                                  const isMapped = table.mapping && Object.values(table.mapping).includes(col.name);
+                                  return (
+                                    <div key={idx} className={`flex items-center justify-between text-xs px-3 py-1.5 rounded-lg border ${
+                                      isMapped ? 'bg-amber-500/10 border-amber-500/30' : 'bg-slate-900/80 border-slate-800'
+                                    }`}>
+                                      <div className="flex items-center space-x-2">
+                                        <span className="font-mono text-slate-200">{col.name}</span>
+                                        {col.primary && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1 rounded">PK</span>}
+                                      </div>
+                                      <span className="font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded text-[11px]">{col.type}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
                         )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: MAPEAMENTO INTELIGENTE */}
+            {activeTab === 'mapeamento' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Mapeamento Inteligente de Colunas</h2>
+                    <p className="text-xs sm:text-sm text-slate-400">Ajuste como os dados da tabela antiga serão gravados nas colunas do novo banco de dados.</p>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-slate-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
+                      Mapeamentos salvos automaticamente
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  {tables.map(table => (
+                    <div key={table.id} className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5 space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <div>
+                          <h3 className="font-bold text-white flex items-center space-x-2">
+                            <span>Tabela: <span className="text-emerald-400 font-mono">{table.name}</span></span>
+                            <span className="text-xs text-slate-400 font-normal">({table.label})</span>
+                          </h3>
+                        </div>
+
+                        <button
+                          onClick={() => handleAutoMapearTabela(table.id)}
+                          className="flex items-center space-x-1.5 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-lg transition"
+                          title="Detectar automaticamente colunas equivalentes"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Auto-Mapear</span>
+                        </button>
+                      </div>
+
+                      <div className="space-y-2.5 bg-slate-950/50 p-4 rounded-xl border border-slate-900">
+                        {table.sourceColumns.map((srcCol, idx) => {
+                          const currentMappedTarget = table.mapping[srcCol.name] || srcCol.name;
+
+                          return (
+                            <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 p-2.5 sm:p-3 rounded-xl border border-slate-800/80">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs font-mono bg-slate-950 px-2.5 py-1 rounded text-amber-400 border border-slate-800">
+                                  {srcCol.name}
+                                </span>
+                                <span className="text-[11px] text-slate-500 font-mono">({srcCol.type})</span>
+                              </div>
+
+                              <div className="flex items-center space-x-3">
+                                <ArrowRightLeft className="w-4 h-4 text-slate-500 hidden sm:block" />
+                                <select
+                                  value={currentMappedTarget}
+                                  onChange={(e) => handleColumnMappingChange(table.id, srcCol.name, e.target.value)}
+                                  className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 w-full sm:w-60 font-mono"
+                                >
+                                  <option value="(ignorar)">-- Ignorar / Não Migrar Coluna --</option>
+                                  {table.targetColumns.map((targetCol, tIdx) => (
+                                    <option key={tIdx} value={targetCol.name}>
+                                      {targetCol.name} ({targetCol.type})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* MÉTODO 2: IMPORTAR ARQUIVO JSON */}
-          {metodo === 'arquivo' && (
-            <div className="space-y-4">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                <div className="flex items-center gap-2 text-slate-800 font-bold text-sm sm:text-base">
-                  <Upload className="w-5 h-5 text-teal-600" />
-                  Importação por Arquivo JSON ou Dump do Supabase
-                </div>
-                <p className="text-xs text-slate-500">
-                  Se preferir não usar conexão direta, você pode subir o arquivo <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-700">.json</code> exportado do Supabase ou colar seu conteúdo no campo abaixo.
-                </p>
-
-                {/* Upload de Arquivo */}
-                <div className="border-2 border-dashed border-slate-300 hover:border-teal-500 rounded-2xl p-6 text-center bg-slate-50/50 transition-colors">
-                  <input
-                    type="file"
-                    id="upload-json"
-                    accept=".json"
-                    onChange={handleUploadArquivo}
-                    className="hidden"
-                  />
-                  <label
-                    htmlFor="upload-json"
-                    className="cursor-pointer flex flex-col items-center justify-center gap-2"
-                  >
-                    <div className="p-3 bg-teal-100 text-teal-700 rounded-2xl">
-                      <Upload className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <span className="text-xs sm:text-sm font-bold text-slate-800 block">
-                        {arquivoNome ? `Arquivo carregado: ${arquivoNome}` : 'Clique para selecionar um arquivo .json'}
-                      </span>
-                      <span className="text-[11px] text-slate-500 block mt-0.5">
-                        Arquivos gerados pelo exportador do PorttoHub ou dump estruturado do Supabase
-                      </span>
-                    </div>
-                  </label>
-                </div>
-
-                {/* Campo de Texto JSON */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Ou cole o conteúdo JSON diretamente aqui:
-                    </label>
-                    {jsonTexto && (
-                      <button
-                        type="button"
-                        onClick={() => setJsonTexto('')}
-                        className="text-[11px] text-rose-600 hover:underline font-medium cursor-pointer"
-                      >
-                        Limpar texto
-                      </button>
-                    )}
+            {/* TAB 4: PAINEL DE MIGRAÇÃO */}
+            {activeTab === 'migracao' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Painel de Execução & Controle de Migração</h2>
+                    <p className="text-xs sm:text-sm text-slate-400">Execute a migração completa de uma vez ou selecione módulo por módulo com poucos cliques.</p>
                   </div>
-                  <textarea
-                    rows={6}
-                    value={jsonTexto}
-                    onChange={(e) => setJsonTexto(e.target.value)}
-                    placeholder='{"condominios": [...], "operadores": [...], "encomendas_itens": [...]}'
-                    className="w-full p-3 text-xs font-mono rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-teal-500 bg-slate-50"
-                  />
                 </div>
 
-                {/* Opções de Limpeza e Condomínio no Método JSON */}
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-2 text-xs">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer font-bold text-rose-950">
+                {/* Card de Status & Execução */}
+                <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Status Atual</span>
+                      <div className="text-lg sm:text-xl font-bold text-white flex items-center space-x-2 mt-1">
+                        {migrationStatus === 'idle' && <span className="text-slate-300">Pronto para iniciar</span>}
+                        {migrationStatus === 'running' && (
+                          <span className="text-amber-400 flex items-center gap-2">
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                            Migrando dados em tempo real...
+                          </span>
+                        )}
+                        {migrationStatus === 'completed' && (
+                          <span className="text-emerald-400 flex items-center gap-2">
+                            <CheckCircle2 className="w-5 h-5" />
+                            Migração concluída com 100% de integridade!
+                          </span>
+                        )}
+                        {migrationStatus === 'error' && (
+                          <span className="text-red-400 flex items-center gap-2">
+                            <AlertCircle className="w-5 h-5" />
+                            Houve uma falha na execução
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-3">
+                      {migrationStatus === 'running' ? (
+                        <button
+                          onClick={handleCancelarMigracao}
+                          className="flex items-center space-x-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition"
+                        >
+                          <Pause className="w-4 h-4 fill-current" />
+                          <span>Interromper</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => startMigration(null)}
+                          className="flex items-center space-x-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-lg shadow-emerald-500/20"
+                        >
+                          <Play className="w-4 h-4 fill-current" />
+                          <span>Iniciar Migração Completa</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Barra de Progresso Real */}
+                  {migrationStatus === 'running' && (
+                    <div className="space-y-2 animate-in fade-in duration-200">
+                      <div className="flex justify-between text-xs font-semibold">
+                        <span className="text-slate-300">
+                          Processando tabela: <span className="text-emerald-400 font-mono">{currentTableMigrating}</span>
+                          {currentBatchInfo && <span className="text-slate-400 ml-2 font-mono">({currentBatchInfo})</span>}
+                        </span>
+                        <span className="text-emerald-400 font-mono">{progress}%</span>
+                      </div>
+                      <div className="w-full bg-slate-950 rounded-full h-3 border border-slate-800 overflow-hidden">
+                        <div
+                          className="bg-gradient-to-r from-emerald-600 to-emerald-400 h-full transition-all duration-300 rounded-full"
+                          style={{ width: `${progress}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Opções de Execução */}
+                  <div className="pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                    <label className="flex items-center space-x-2 cursor-pointer bg-slate-950/60 p-2.5 rounded-xl border border-slate-900">
                       <input
                         type="checkbox"
-                        checked={limparBancoAntes}
-                        onChange={(e) => setLimparBancoAntes(e.target.checked)}
-                        disabled={importandoJson}
-                        className="w-4 h-4 text-rose-600 rounded border-slate-300 focus:ring-rose-500 cursor-pointer"
+                        checked={modoSimulacao}
+                        onChange={(e) => setModoSimulacao(e.target.checked)}
+                        className="rounded text-emerald-500 focus:ring-0"
                       />
-                      <span>Limpar banco novo antes de importar JSON (Reset Geral)</span>
+                      <span className="text-slate-300">Simulação (Dry-Run sem gravar)</span>
                     </label>
 
+                    <label className="flex items-center space-x-2 cursor-pointer bg-slate-950/60 p-2.5 rounded-xl border border-slate-900">
+                      <input
+                        type="checkbox"
+                        checked={salvarBackupAntes}
+                        onChange={(e) => setSalvarBackupAntes(e.target.checked)}
+                        className="rounded text-emerald-500 focus:ring-0"
+                      />
+                      <span className="text-slate-300">Backup JSON prévio automático</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 cursor-pointer bg-slate-950/60 p-2.5 rounded-xl border border-slate-900">
+                      <input
+                        type="checkbox"
+                        checked={limparDestinoAntes}
+                        onChange={(e) => setLimparDestinoAntes(e.target.checked)}
+                        className="rounded text-emerald-500 focus:ring-0"
+                      />
+                      <span className="text-slate-300">Zerar destino antes de iniciar</span>
+                    </label>
+                  </div>
+
+                  {/* Escopo de Condomínio */}
+                  {condominiosDestino.length > 0 && (
+                    <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-400">Vincular dados ao condomínio:</span>
+                      <select
+                        value={escopoCondominio}
+                        onChange={(e) => setEscopoCondominio(e.target.value)}
+                        className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="todos">Preservar todos os condomínios originais</option>
+                        {condominiosDestino.map(c => (
+                          <option key={c.id} value={c.id}>{c.nome}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* Estatísticas de Seleção */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-slate-900/40 border border-slate-800 p-3.5 rounded-xl text-center">
+                    <span className="text-[11px] text-slate-400 block uppercase font-semibold">Tabelas</span>
+                    <span className="text-lg font-bold text-white font-mono">{totalTabelasSelecionadas} / {tables.length}</span>
+                  </div>
+                  <div className="bg-slate-900/40 border border-slate-800 p-3.5 rounded-xl text-center">
+                    <span className="text-[11px] text-slate-400 block uppercase font-semibold">Registros</span>
+                    <span className="text-lg font-bold text-amber-400 font-mono">{totalRegistrosEstimados.toLocaleString('pt-BR')}</span>
+                  </div>
+                  <div className="bg-slate-900/40 border border-slate-800 p-3.5 rounded-xl text-center">
+                    <span className="text-[11px] text-slate-400 block uppercase font-semibold">Migrados</span>
+                    <span className="text-lg font-bold text-emerald-400 font-mono">{totalMigradosSessao.toLocaleString('pt-BR')}</span>
+                  </div>
+                  <div className="bg-slate-900/40 border border-slate-800 p-3.5 rounded-xl text-center">
+                    <span className="text-[11px] text-slate-400 block uppercase font-semibold">Auto-Cura</span>
+                    <span className="text-xs font-bold text-cyan-400 block pt-1">Ativa (100% FK)</span>
+                  </div>
+                </div>
+
+                {/* Migração Módulo por Módulo */}
+                <div className="space-y-3">
+                  <h3 className="font-bold text-white text-sm sm:text-base">Migração Módulo por Módulo (Tabela por Tabela)</h3>
+                  
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {tables.map(table => (
+                      <div key={table.id} className="bg-slate-900/40 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className="p-2 rounded-lg bg-slate-800 text-slate-300 shrink-0">
+                            <Layers className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="font-semibold text-white text-sm truncate">{table.label}</h4>
+                            <span className="text-xs text-slate-400 font-mono">
+                              {table.name} • {table.recordsCount.toLocaleString('pt-BR')} registros
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => startMigration(table.id)}
+                          disabled={migrationStatus === 'running'}
+                          className="flex items-center space-x-1.5 bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 disabled:opacity-50 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition shrink-0"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>Migrar Este Módulo</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: FERRAMENTAS & DUMPS */}
+            {activeTab === 'ferramentas' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <div>
+                  <h2 className="text-lg sm:text-xl font-bold text-white">Ferramentas Avançadas, Backups e Scripts SQL</h2>
+                  <p className="text-xs sm:text-sm text-slate-400">Exporte dados brutos, importe backups offline ou gere scripts SQL universais.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Card 1: Baixar Dump JSON */}
+                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 w-fit">
+                        <Download className="w-5 h-5" />
+                      </div>
+                      <h3 className="font-bold text-white text-base">Exportar Backup JSON Completo</h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Gera um arquivo .json seguro com 100% dos registros de todas as tabelas da instância de origem selecionada.
+                      </p>
+                    </div>
+
                     <button
-                      type="button"
-                      onClick={() => {
-                        setTextoConfirmacaoLimpeza('');
-                        setErroConfirmacaoLimpeza(null);
-                        setModalConfirmacaoLimpeza(true);
-                      }}
-                      disabled={importandoJson || limpandoManual}
-                      className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      onClick={handleBaixarBackupJson}
+                      className="w-full flex items-center justify-center space-x-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Limpar Banco Agora</span>
+                      <Download className="w-4 h-4" />
+                      <span>Baixar Arquivo JSON</span>
                     </button>
                   </div>
 
-                  <div className="pt-1">
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      Direcionamento do Condomínio para os dados do JSON:
-                    </label>
-                    <select
-                      value={escopoCondominioMigracao}
-                      onChange={(e) => setEscopoCondominioMigracao(e.target.value)}
-                      disabled={importandoJson}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="todos">🌐 Multicondomínio (Preservar condomínios originais do JSON)</option>
-                      {listaCondominios.map(c => (
-                        <option key={c.id} value={c.id}>
-                          🏢 Vincular todos os dados importados ao condomínio: {c.nome}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Botão de Importação */}
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-xs text-slate-500">
-                    {jsonTexto ? `Tamanho do texto: ${(jsonTexto.length / 1024).toFixed(1)} KB` : 'Aguardando dados...'}
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={handleImportarJson}
-                    disabled={importandoJson || !jsonTexto.trim()}
-                    className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition disabled:opacity-50 cursor-pointer"
-                  >
-                    {importandoJson ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Importando {progressoJson.tabelaAtual} ({progressoJson.salvos}/{progressoJson.total})...
-                      </>
-                    ) : (
-                      <>
-                        <Check className="w-4 h-4" />
-                        Gravar Dados no banco de dados PorttoHub
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {/* Resultado da Importação */}
-                {resultadoJson && (
-                  <div className={`p-4 rounded-xl border text-xs sm:text-sm space-y-2 ${
-                    resultadoJson.sucesso
-                      ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                      : 'bg-amber-50 text-amber-900 border-amber-200'
-                  }`}>
-                    <div className="flex items-center gap-2 font-bold">
-                      {resultadoJson.sucesso ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                      ) : (
-                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                      )}
-                      <span>
-                        Importação concluída: {resultadoJson.total} registros inseridos com sucesso no Supabase!
-                      </span>
+                  {/* Card 2: Importar Dump JSON */}
+                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 w-fit">
+                        <Upload className="w-5 h-5" />
+                      </div>
+                      <h3 className="font-bold text-white text-base">Importar Backup JSON para o Destino</h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Restaure tabelas e registros diretamente a partir de um arquivo .json previamente salvo em seu computador.
+                      </p>
                     </div>
 
-                    {resultadoJson.detalhes && Object.keys(resultadoJson.detalhes).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1 text-xs">
-                        {Object.entries(resultadoJson.detalhes).map(([tab, count]) => (
-                          <span key={tab} className="px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-700 font-mono text-[11px]">
-                            {tab}: <strong>{count}</strong>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {resultadoJson.erros && resultadoJson.erros.length > 0 && (
-                      <div className="text-[11px] text-rose-700 pt-1">
-                        Avisos: {resultadoJson.erros.slice(0, 3).join(' | ')}
-                      </div>
-                    )}
+                    <label className="w-full flex items-center justify-center space-x-2 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-xl font-bold text-xs sm:text-sm cursor-pointer border border-slate-700 transition">
+                      <Upload className="w-4 h-4" />
+                      <span>{importandoJson ? 'Importando dados...' : (arquivoUploadNome ? `Arquivo: ${arquivoUploadNome}` : 'Selecionar Arquivo .JSON')}</span>
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleUploadArquivoJson}
+                        disabled={importandoJson}
+                        className="hidden"
+                      />
+                    </label>
                   </div>
-                )}
-              </div>
-            </div>
-          )}
+                </div>
 
-          {/* MÉTODO 3: SCRIPT SQL SUPABASE */}
-          {metodo === 'script_sql' && (
-            <div className="space-y-4">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
+                {/* Card 3: Gerador de Script SQL */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold text-white text-base">Script SQL Direto (Supabase Query Editor)</h3>
+                      <p className="text-xs text-slate-400">
+                        Copie o comando SQL e rode no SQL Editor do Supabase antigo para gerar um Dump direto.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={handleCopiarSql}
+                      className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 transition shrink-0"
+                    >
+                      <Copy className="w-4 h-4" />
+                      <span>{sqlCopiado ? 'Copiado!' : 'Copiar Script SQL'}</span>
+                    </button>
+                  </div>
+
+                  <pre className="bg-slate-950 p-4 rounded-xl text-xs font-mono text-slate-300 border border-slate-900 overflow-x-auto max-h-48 text-[11px] leading-relaxed">
+                    {generateSupabaseDumpSqlScript()}
+                  </pre>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 6: LOGS & AUDITORIA */}
+            {activeTab === 'logs' && (
+              <div className="space-y-4 max-w-5xl mx-auto flex flex-col h-full">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
                   <div>
-                    <h3 className="font-bold text-slate-800 text-sm sm:text-base flex items-center gap-2">
-                      <FileCode className="w-5 h-5 text-purple-600" />
-                      Extração Direta via Supabase SQL Editor
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Rode este script no seu banco antigo para gerar o JSON consolidado diretamente pelo PostgreSQL (bypassa RLS e permissões de chave).
-                    </p>
+                    <h2 className="text-lg sm:text-xl font-bold text-white">Logs & Atividades em Tempo Real</h2>
+                    <p className="text-xs sm:text-sm text-slate-400">Histórico completo de auditoria do processo de migração.</p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={handleCopiarSql}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition cursor-pointer"
-                  >
-                    {sqlCopiado ? (
-                      <>
-                        <Check className="w-4 h-4 text-emerald-300" /> Copiado!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-4 h-4" /> Copiar Script SQL
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center space-x-2 flex-wrap">
+                    <button
+                      onClick={handleCopiarLogs}
+                      className="bg-slate-900 hover:bg-slate-800 text-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-800 transition"
+                      title="Copiar para área de transferência"
+                    >
+                      <Copy className="w-3.5 h-3.5 inline mr-1" />
+                      Copiar
+                    </button>
+                    <button
+                      onClick={handleBaixarLogs}
+                      className="bg-slate-900 hover:bg-slate-800 text-slate-300 px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-800 transition"
+                      title="Salvar arquivo de logs .txt"
+                    >
+                      <Download className="w-3.5 h-3.5 inline mr-1" />
+                      Baixar .txt
+                    </button>
+                    <button
+                      onClick={() => setLogs([])}
+                      className="bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-800 transition"
+                    >
+                      Limpar Logs
+                    </button>
+                  </div>
                 </div>
 
-                <div className="p-4 bg-slate-900 text-slate-100 rounded-2xl font-mono text-xs overflow-x-auto max-h-[280px]">
-                  <pre>{scriptSql}</pre>
+                {/* Filtros de Logs */}
+                <div className="flex items-center space-x-2 shrink-0 flex-wrap gap-y-2">
+                  <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
+                    {(['all', 'info', 'success', 'warning', 'error'] as const).map(tipo => (
+                      <button
+                        key={tipo}
+                        onClick={() => setFiltroTipoLog(tipo)}
+                        className={`px-2.5 py-1 rounded-lg text-xs capitalize transition ${
+                          filtroTipoLog === tipo
+                            ? 'bg-emerald-500/20 text-emerald-400 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {tipo === 'all' ? 'Todos' : tipo}
+                      </button>
+                    ))}
+                  </div>
+
+                  <label className="flex items-center space-x-1.5 text-xs text-slate-400 ml-auto cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoScroll}
+                      onChange={(e) => setAutoScroll(e.target.checked)}
+                      className="rounded text-emerald-500 focus:ring-0"
+                    />
+                    <span>Auto-scroll</span>
+                  </label>
                 </div>
 
-                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3.5 text-xs text-purple-950 space-y-1">
-                  <strong>Instruções de Uso no Banco Antigo:</strong>
-                  <ol className="list-decimal list-inside space-y-0.5 text-purple-900 text-[11px]">
-                    <li>Acesse o painel do seu Supabase antigo e clique em <strong>SQL Editor</strong> &rarr; <strong>New Query</strong>.</li>
-                    <li>Cole o script acima e clique em <strong>Run</strong>.</li>
-                    <li>O PostgreSQL retornará 1 única linha com a coluna <code className="bg-purple-100 px-1 rounded">porttohub_dump_completo</code>.</li>
-                    <li>Copie o resultado e cole na aba <strong>Método 2: Importar Arquivo JSON</strong> deste migrador.</li>
-                  </ol>
+                {/* Terminal Monospace */}
+                <div
+                  ref={logScrollRef}
+                  className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex-1 overflow-y-auto font-mono text-xs space-y-1.5 shadow-inner min-h-[380px]"
+                >
+                  {logsFiltrados.length === 0 ? (
+                    <div className="text-slate-500 text-center py-12">Nenhum registro encontrado no log.</div>
+                  ) : (
+                    logsFiltrados.map(log => (
+                      <div key={log.id} className="flex items-start space-x-3 py-1 border-b border-slate-900/60 last:border-0">
+                        <span className="text-slate-500 shrink-0 select-none">[{log.timestamp}]</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold shrink-0 ${
+                          log.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                          log.type === 'warning' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                          log.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                          'bg-slate-800 text-slate-300'
+                        }`}>
+                          {log.type}
+                        </span>
+                        <span className="text-slate-300 break-all leading-relaxed">{log.message}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
+          </main>
         </div>
+
       </div>
 
-      {/* Modal de Confirmação Segura de Limpeza Manual do Banco Novo */}
-      {modalConfirmacaoLimpeza && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
-          <div className="bg-slate-900 border-2 border-rose-500/80 text-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center gap-3">
-              <span className="p-3 bg-rose-600 text-white rounded-2xl shadow-lg">
-                <Trash2 className="w-6 h-6 animate-pulse" />
-              </span>
+      {/* MODAL CRÍTICO DE CONFIRMAÇÃO: ZERAR BANCO DESTINO */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-60 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-red-500/40 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center space-x-3 text-red-400">
+              <div className="p-3 bg-red-500/10 rounded-2xl border border-red-500/20 shrink-0">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
               <div>
-                <h3 className="text-base font-black uppercase text-white">Reset Geral do Banco Novo</h3>
-                <p className="text-xs text-rose-300">Ação de limpeza total sem retorno</p>
+                <h3 className="font-bold text-lg text-white">Zerar Banco de Destino</h3>
+                <p className="text-xs text-red-400 font-medium">Atenção: Ação irreversível!</p>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Esta ação excluirá <strong>todos os registros das 28 tabelas operacionais</strong> no banco de destino ativo (condomínios, operadores, moradores, encomendas, lotes RE, chaves, ocorrências, etc.). O banco ficará 100% zerado para receber os dados importados.
+              Esta operação irá limpar de forma estruturada todas as 28 tabelas do banco de destino (em ordem reversa de chaves estrangeiras) para permitir uma recepção limpa dos novos dados. Para autorizar, digite <strong className="text-white font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">ZERAR DESTINO</strong> abaixo:
             </p>
 
-            <div className="space-y-1.5">
-              <label className="block text-[11px] font-bold text-rose-400 uppercase">
-                Para confirmar, digite exatamente: <span className="text-white font-mono font-black">CONFIRMAR LIMPEZA</span>
-              </label>
-              <input
-                type="text"
-                value={textoConfirmacaoLimpeza}
-                onChange={(e) => {
-                  setTextoConfirmacaoLimpeza(e.target.value);
-                  setErroConfirmacaoLimpeza(null);
-                }}
-                placeholder="CONFIRMAR LIMPEZA"
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono font-bold text-rose-200 focus:outline-hidden focus:border-rose-500"
-              />
-              {erroConfirmacaoLimpeza && (
-                <p className="text-[11px] text-rose-400 font-bold">{erroConfirmacaoLimpeza}</p>
-              )}
-            </div>
+            <input
+              type="text"
+              placeholder="Digite ZERAR DESTINO"
+              value={resetConfirmText}
+              onChange={(e) => setResetConfirmText(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-red-500 text-center tracking-wider"
+              autoFocus
+            />
 
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex justify-end space-x-3 pt-2">
               <button
                 type="button"
-                onClick={() => setModalConfirmacaoLimpeza(false)}
-                disabled={limpandoManual}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+                onClick={() => { setShowResetModal(false); setResetConfirmText(''); }}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                onClick={handleExecutarLimpezaManual}
-                disabled={limpandoManual || textoConfirmacaoLimpeza.trim().toUpperCase() !== 'CONFIRMAR LIMPEZA'}
-                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-black transition flex items-center gap-2 cursor-pointer shadow-lg"
+                disabled={resetConfirmText !== 'ZERAR DESTINO' || isResetting}
+                onClick={executeDatabaseReset}
+                className="bg-red-500 hover:bg-red-400 disabled:opacity-40 text-slate-950 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center space-x-2"
               >
-                {limpandoManual ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Limpando Banco...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4" />
-                    <span>EXCLUIR TUDO E ZERAR</span>
-                  </>
-                )}
+                {isResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                <span>{isResetting ? 'Limpando...' : 'Zerar Banco Agora'}</span>
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO DE BANCO */}
+      {connParaExcluir && (
+        <div className="fixed inset-0 z-60 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center space-x-3 text-amber-400">
+              <div className="p-3 bg-red-500/10 rounded-2xl border border-red-500/20 shrink-0">
+                <Trash2 className="w-6 h-6 text-red-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-white">Excluir Banco do Repositório</h3>
+                <p className="text-xs text-slate-400">Remover esta conexão permanentemente</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tem certeza que deseja excluir a conexão <strong className="text-white font-semibold">"{connParaExcluir.name}"</strong>?
+              {connParaExcluir.isDefault && (
+                <span className="block mt-1 text-slate-400 text-[11px]">
+                  (Nota: Você poderá restaurá-la a qualquer momento clicando em "Restaurar Repositório".)
+                </span>
+              )}
+            </p>
+
+            <div className="flex justify-end space-x-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setConnParaExcluir(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmDeleteConnection(connParaExcluir.id)}
+                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-md shadow-red-500/20 cursor-pointer"
+              >
+                Confirmar Exclusão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

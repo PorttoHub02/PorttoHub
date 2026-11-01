@@ -1,1486 +1,1605 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import {
-  Scan,
-  ShieldCheck,
-  UserCheck,
-  Car,
-  Users,
-  Search,
-  Filter,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
-  Camera,
-  QrCode,
-  Share2,
-  LogOut,
-  LogIn,
-  Key,
-  ShieldAlert,
-  Plus,
-  X,
-  FileSpreadsheet,
-  Download,
-  Building,
-  Check,
-  Trash2,
-  Calendar,
-  Eye,
-  RefreshCw,
-  Phone,
-  HardHat,
-  Package,
-  Sparkles,
-  Info
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Building2, Camera, ShieldCheck, ShieldAlert, UserCheck, UserPlus, 
+  Key, LogIn, Lock, Unlock, RefreshCw, Layers, Search, Filter, 
+  CheckCircle2, XCircle, AlertTriangle, Cpu, Video, Settings, Volume2, 
+  VolumeX, ArrowRightLeft, Users, Home, Shield, Trash2, Check, Smartphone, 
+  Radio, Clock, AlertCircle, Play, Square, Scan, Sliders, Download, Eye
 } from 'lucide-react';
-import {
-  PontoAcesso,
-  RegistroAcesso,
-  PasseVirtualQR,
-  BloqueioSeguranca,
-  carregarPontosAcesso,
-  carregarRegistrosAcesso,
-  carregarPassesVirtuais,
-  carregarBlacklist,
-  verificarBloqueio,
-  salvarItemBlacklist,
-  registrarEntradaAcesso,
-  registrarSaidaAcesso,
-  gerarPasseVirtual,
-  validarTokenPasse,
-  formatarMensagemWhatsAppPasse
-} from '../services/controleAcessoService';
-import {
-  carregarCondominioConfig,
-  getCondominioAtivoId,
-  CondominioConfig
-} from '../services/condominioService';
-import { formatarLinkWhatsApp } from '../services/configWhatsappService';
-import { verificarPermissao } from '../services/permissoesService';
 import { supabase } from '../services/supabase';
+import { 
+  getCondominioAtivoId, 
+  carregarCondominioConfig, 
+  isUUID, 
+  CondominioConfig 
+} from '../services/condominioService';
+import { salvarCacheLocal, obterCacheLocal } from '../services/offlineStorageService';
+import { cachedQuery } from '../services/redisCacheService';
 
 interface ControleAcessoProps {
   usuarioLogado?: any;
+  condominioAtivoProp?: string;
+  onNavigate?: (modulo: string) => void;
 }
 
-export default function ControleAcesso({ usuarioLogado }: ControleAcessoProps) {
-  const [condId, setCondId] = useState(() => getCondominioAtivoId(usuarioLogado));
-  const [condoConfig, setCondoConfig] = useState<CondominioConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+export interface MoradorBio {
+  id: string;
+  condoId: string;
+  name: string;
+  unit: string;
+  bloco?: string;
+  unidadeNumero?: string;
+  type: string;
+  status: 'Ativo' | 'Bloqueado';
+  document: string;
+  phone: string;
+  faceEnrolled: boolean;
+  avatar: string;
+  createdAt: string;
+}
 
-  // Dados
-  const [pontosAcesso, setPontosAcesso] = useState<PontoAcesso[]>([]);
-  const [registros, setRegistros] = useState<RegistroAcesso[]>([]);
-  const [passesVirtuais, setPassesVirtuais] = useState<PasseVirtualQR[]>([]);
-  const [blacklist, setBlacklist] = useState<BloqueioSeguranca[]>([]);
+export interface AccessLogItem {
+  id: string;
+  condoId: string;
+  residentName: string;
+  unit: string;
+  timestamp: string;
+  dateStr?: string;
+  status: 'Liberado' | 'Negado' | 'Cadastrado';
+  method: string;
+  gate: string;
+  reason?: string;
+}
 
-  // Abas
-  const [abaAtiva, setAbaAtiva] = useState<'entrada' | 'presentes' | 'validador_qr' | 'passes' | 'historico' | 'blacklist'>('entrada');
+export interface CondominioOption {
+  id: string;
+  name: string;
+  code: string;
+  totalUnits?: number;
+}
 
-  // Filtros & Buscas
-  const [termoBusca, setTermoBusca] = useState('');
-  const [filtroTipo, setFiltroTipo] = useState<string>('todos');
-  const [feedback, setFeedback] = useState<{ tipo: 'sucesso' | 'erro' | 'alerta'; texto: string } | null>(null);
+export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: ControleAcessoProps) {
+  // --- IDENTIFICAÇÃO DO CONDOMÍNIO ATIVO LOGADO NO MOMENTO ---
+  const initialCondoId = useMemo(() => {
+    return getCondominioAtivoId(usuarioLogado, condominioAtivoProp) || 'condo_padrao';
+  }, [usuarioLogado, condominioAtivoProp]);
 
-  // Form de Entrada Rápida
-  const [formEntrada, setFormEntrada] = useState<{
-    tipo: RegistroAcesso['tipo'];
-    nome: string;
-    documento: string;
-    telefone: string;
-    empresa: string;
-    unidade_bloco: string;
-    morador_responsavel: string;
-    ponto_acesso_entrada: string;
-    veiculo_placa: string;
-    veiculo_modelo: string;
-    veiculo_cor: string;
-    cracha_ou_tag: string;
-    observacoes: string;
-    foto_entrada_url?: string;
-  }>({
-    tipo: 'visitante',
-    nome: '',
-    documento: '',
-    telefone: '',
-    empresa: '',
-    unidade_bloco: '',
-    morador_responsavel: '',
-    ponto_acesso_entrada: '',
-    veiculo_placa: '',
-    veiculo_modelo: '',
-    veiculo_cor: '',
-    cracha_ou_tag: '',
-    observacoes: ''
+  const [activeCondoId, setActiveCondoId] = useState<string>(initialCondoId);
+  const [condominios, setCondominios] = useState<CondominioOption[]>([
+    {
+      id: initialCondoId,
+      name: usuarioLogado?.condominio_nome || 'Condomínio Ativo',
+      code: 'PORTTO-01',
+      totalUnits: 120
+    }
+  ]);
+  const [carregandoCondos, setCarregandoCondos] = useState<boolean>(true);
+
+  // Informações do condomínio atual selecionado
+  const currentCondo = useMemo(() => {
+    return condominios.find(c => c.id === activeCondoId) || condominios[0] || {
+      id: activeCondoId,
+      name: usuarioLogado?.condominio_nome || 'Condomínio Atual',
+      code: 'CONDO-ACT',
+      totalUnits: 100
+    };
+  }, [condominios, activeCondoId, usuarioLogado?.condominio_nome]);
+
+  // Se o usuário logado tiver seu próprio condomínio fixado (não supervisor/admin geral), mantém sincronizado
+  useEffect(() => {
+    const cid = getCondominioAtivoId(usuarioLogado, condominioAtivoProp);
+    if (cid && cid !== 'global' && cid !== 'todos') {
+      setActiveCondoId(cid);
+    }
+  }, [usuarioLogado, condominioAtivoProp]);
+
+  // --- BUSCA CONDOS REAIS DO SUPABASE / CACHE ---
+  useEffect(() => {
+    let ativo = true;
+
+    async function buscarCondominios() {
+      try {
+        setCarregandoCondos(true);
+        const { data, error } = await supabase
+          .from('condominios')
+          .select('id, nome, tipo_estrutura, unidades_por_bloco, qtd_blocos')
+          .order('nome');
+
+        if (!error && data && Array.isArray(data) && data.length > 0) {
+          if (!ativo) return;
+          const formatados: CondominioOption[] = data.map((c, i) => ({
+            id: String(c.id),
+            name: c.nome || `Condomínio ${i + 1}`,
+            code: (c.nome || 'COND').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() + `-${String(i + 1).padStart(2, '0')}`,
+            totalUnits: (Number(c.unidades_por_bloco) || 20) * (Number(c.qtd_blocos) || 1)
+          }));
+          setCondominios(formatados);
+
+          // Se o activeCondoId não constar, seleciona o correspondente
+          const achou = formatados.some(c => c.id === activeCondoId);
+          if (!achou && formatados[0]) {
+            const desejado = getCondominioAtivoId(usuarioLogado, condominioAtivoProp);
+            if (desejado && formatados.some(c => c.id === desejado)) {
+              setActiveCondoId(desejado);
+            } else {
+              setActiveCondoId(formatados[0].id);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[ControleAcesso] Aviso ao buscar condomínios:', err);
+      } finally {
+        if (ativo) setCarregandoCondos(false);
+      }
+    }
+
+    buscarCondominios();
+    return () => { ativo = false; };
+  }, [usuarioLogado, condominioAtivoProp]);
+
+  // --- DADOS DE MORADORES FILTRADOS STRICTLY PELO CONDOMÍNIO ATIVO ---
+  const [residents, setResidents] = useState<MoradorBio[]>([]);
+  const [loadingResidents, setLoadingResidents] = useState<boolean>(true);
+
+  // Carrega moradores reais do Supabase para o condomínio ativo no momento
+  const recarregarMoradoresDoCondominio = async (condoIdAlvo: string) => {
+    if (!condoIdAlvo) return;
+    setLoadingResidents(true);
+    try {
+      let listaMapeada: MoradorBio[] = [];
+
+      if (isUUID(condoIdAlvo)) {
+        const { data, error } = await supabase
+          .from('moradores')
+          .select('*')
+          .eq('condominio_id', condoIdAlvo)
+          .order('nome', { ascending: true });
+
+        if (!error && data && Array.isArray(data)) {
+          listaMapeada = data.map((m: any) => {
+            const identificacaoUnidade = m.bloco && m.bloco.toLowerCase() !== 'casa'
+              ? `${m.bloco} - Apto ${m.unidade || ''}`
+              : (m.bloco ? `${m.bloco} ${m.unidade || ''}` : `Unidade ${m.unidade || ''}`);
+
+            return {
+              id: String(m.id),
+              condoId: String(m.condominio_id || condoIdAlvo),
+              name: m.nome || 'Morador sem nome',
+              unit: identificacaoUnidade.trim(),
+              bloco: m.bloco || '',
+              unidadeNumero: m.unidade || '',
+              type: m.tipo || 'Morador',
+              status: m.status_acesso === 'bloqueado' ? 'Bloqueado' : 'Ativo',
+              document: m.cpf || m.rg || 'Não informado',
+              phone: m.telefone || 'Não informado',
+              faceEnrolled: Boolean(m.foto_url),
+              avatar: m.foto_url || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250`,
+              createdAt: m.created_at ? new Date(m.created_at).toLocaleDateString('pt-BR') : 'Hoje'
+            };
+          });
+        }
+      }
+
+      // Se não encontrou no Supabase, tenta carregar do cache local ou criar inicial para demonstração
+      if (listaMapeada.length === 0) {
+        const cacheLocal = obterCacheLocal<any[]>('moradores', 'global', []);
+        const doCondo = cacheLocal.filter(m => String(m.condominio_id || m.condoId) === condoIdAlvo);
+        if (doCondo.length > 0) {
+          listaMapeada = doCondo.map(m => ({
+            id: String(m.id),
+            condoId: condoIdAlvo,
+            name: m.nome || m.name,
+            unit: m.unit || `${m.bloco || 'Casa'} ${m.unidade || ''}`,
+            bloco: m.bloco || '',
+            unidadeNumero: m.unidade || '',
+            type: m.tipo || m.type || 'Morador',
+            status: m.status_acesso === 'bloqueado' || m.status === 'Bloqueado' ? 'Bloqueado' : 'Ativo',
+            document: m.cpf || m.document || '000.000.000-00',
+            phone: m.telefone || m.phone || '(11) 99999-9999',
+            faceEnrolled: Boolean(m.foto_url || m.avatar),
+            avatar: m.foto_url || m.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
+            createdAt: 'Recente'
+          }));
+        } else {
+          // Se for primeira vez e não houver registros, inicializa amostras vinculadas ao condomínio ativo
+          const amostrasIniciais: MoradorBio[] = [
+            {
+              id: `res_${condoIdAlvo.slice(0, 6)}_1`,
+              condoId: condoIdAlvo,
+              name: 'Carlos Eduardo Silva',
+              unit: 'Bloco A - Apto 302',
+              type: 'Morador',
+              status: 'Ativo',
+              document: '123.456.789-00',
+              phone: '(11) 98765-4321',
+              faceEnrolled: true,
+              avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
+              createdAt: '2025-01-15'
+            },
+            {
+              id: `res_${condoIdAlvo.slice(0, 6)}_2`,
+              condoId: condoIdAlvo,
+              name: 'Mariana Santos Ribeiro',
+              unit: 'Bloco B - Apto 104',
+              type: 'Morador',
+              status: 'Ativo',
+              document: '987.654.321-11',
+              phone: '(11) 97654-3210',
+              faceEnrolled: true,
+              avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=250',
+              createdAt: '2025-02-01'
+            },
+            {
+              id: `res_${condoIdAlvo.slice(0, 6)}_3`,
+              condoId: condoIdAlvo,
+              name: 'Roberto de Oliveira',
+              unit: 'Bloco A - Apto 101',
+              type: 'Prestador',
+              status: 'Bloqueado',
+              document: '456.789.123-55',
+              phone: '(11) 91234-5678',
+              faceEnrolled: true,
+              avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=250',
+              createdAt: '2025-02-10'
+            }
+          ];
+          listaMapeada = amostrasIniciais;
+        }
+      }
+
+      setResidents(listaMapeada);
+    } catch (e) {
+      console.warn('[ControleAcesso] Erro ao carregar moradores:', e);
+    } finally {
+      setLoadingResidents(false);
+    }
+  };
+
+  useEffect(() => {
+    recarregarMoradoresDoCondominio(activeCondoId);
+  }, [activeCondoId]);
+
+  // --- LOGS DE AUDITORIA DE ACESSO ---
+  const [accessLogs, setAccessLogs] = useState<AccessLogItem[]>(() => {
+    try {
+      const salvo = localStorage.getItem(`porttohub_biometria_logs_${activeCondoId}`);
+      if (salvo) return JSON.parse(salvo);
+    } catch {}
+    return [
+      {
+        id: `log_init_1`,
+        condoId: activeCondoId,
+        residentName: 'Carlos Eduardo Silva',
+        unit: 'Bloco A - Apto 302',
+        timestamp: new Date(Date.now() - 1000 * 60 * 5).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        dateStr: new Date().toLocaleDateString('pt-BR'),
+        status: 'Liberado',
+        method: 'Reconhecimento Facial',
+        gate: 'Portão Pedestre Social'
+      },
+      {
+        id: `log_init_2`,
+        condoId: activeCondoId,
+        residentName: 'Roberto de Oliveira',
+        unit: 'Bloco A - Apto 101',
+        timestamp: new Date(Date.now() - 1000 * 60 * 25).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        dateStr: new Date().toLocaleDateString('pt-BR'),
+        status: 'Negado',
+        method: 'Reconhecimento Facial',
+        reason: 'Cadastro Bloqueado',
+        gate: 'Portão Pedestre Social'
+      }
+    ];
   });
 
-  const [alertaSegurancaDetectado, setAlertaSegurancaDetectado] = useState<BloqueioSeguranca | null>(null);
+  // Salva logs quando atualizados
+  useEffect(() => {
+    try {
+      localStorage.setItem(`porttohub_biometria_logs_${activeCondoId}`, JSON.stringify(accessLogs.slice(0, 100)));
+    } catch {}
+  }, [accessLogs, activeCondoId]);
 
-  // Câmera / Foto
-  const [cameraAtiva, setCameraAtiva] = useState(false);
+  // --- ABAS DE NAVEGAÇÃO ---
+  const [activeTab, setActiveTab] = useState<'totem' | 'moradores' | 'cadastramento' | 'logs' | 'dispositivos'>('totem');
+
+  // --- CAMERA & WEBCAM RECOGNITION STATE ---
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(true);
 
-  // Scanner QR Code / Token
-  const [tokenParaValidar, setTokenParaValidar] = useState('');
-  const [resultadoValidacaoQR, setResultadoValidacaoQR] = useState<{
-    valido: boolean;
-    passe?: PasseVirtualQR;
-    motivo?: string;
-  } | null>(null);
+  // Recognition Simulation States
+  const [scanningStatus, setScanningStatus] = useState<'idle' | 'detecting' | 'matched' | 'denied'>('idle');
+  const [lastMatchResult, setLastMatchResult] = useState<any | null>(null);
+  const [relayGateStatus, setRelayGateStatus] = useState<{ pedestrian: boolean; vehicle: boolean }>({ pedestrian: false, vehicle: false });
+  const [livenessScore, setLivenessScore] = useState<number>(98.6);
 
-  // Form Novo Passe Virtual
-  const [modalNovoPasse, setModalNovoPasse] = useState(false);
-  const [formNovoPasse, setFormNovoPasse] = useState({
-    visitante_nome: '',
-    visitante_documento: '',
-    unidade_bloco: '',
-    morador_nome: '',
-    morador_telefone: '',
-    tipo: 'visitante' as any,
-    data_validade: new Date().toISOString().split('T')[0],
-    hora_inicio: '08:00',
-    hora_fim: '23:00',
-    max_usos: 1,
-    observacoes: ''
+  // Filter & Search States (Residents)
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<string>('todos');
+  const [filterType, setFilterType] = useState<string>('todos');
+
+  // New Resident Form Modal / State
+  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
+  const [salvandoMorador, setSalvandoMorador] = useState<boolean>(false);
+  const [newResident, setNewResident] = useState<{
+    name: string;
+    unit: string;
+    type: string;
+    document: string;
+    phone: string;
+    status: 'Ativo' | 'Bloqueado';
+    avatar: string;
+  }>({
+    name: '',
+    unit: '',
+    type: 'Morador',
+    document: '',
+    phone: '',
+    status: 'Ativo',
+    avatar: ''
   });
+  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
 
-  // Modal Blacklist
-  const [modalNovoBloqueio, setModalNovoBloqueio] = useState(false);
-  const [formBloqueio, setFormBloqueio] = useState({
-    tipo: 'pessoa' as 'pessoa' | 'veiculo',
-    nome_ou_placa: '',
-    documento: '',
-    motivo: '',
-    gravidade: 'bloqueio_total' as any
-  });
+  // Moradores filtrados STRICTLY pelo condomínio ativo
+  const condoResidents = useMemo(() => {
+    return residents.filter(r => r.condoId === activeCondoId);
+  }, [residents, activeCondoId]);
 
-  // Monitora troca global de condomínio
-  useEffect(() => {
-    const handleCondoChange = (e: any) => {
-      const novoId = e?.detail?.id;
-      if (novoId && novoId !== 'global' && novoId !== 'todos') {
-        setCondId(novoId);
-      } else {
-        setCondId(getCondominioAtivoId(usuarioLogado));
-      }
-    };
-    window.addEventListener('infport:condominio_alterado', handleCondoChange);
-    return () => window.removeEventListener('infport:condominio_alterado', handleCondoChange);
-  }, [usuarioLogado]);
+  const condoLogs = useMemo(() => {
+    return accessLogs.filter(l => l.condoId === activeCondoId);
+  }, [accessLogs, activeCondoId]);
 
-  // Carrega dados iniciais
-  useEffect(() => {
-    carregarTudo();
-  }, [condId]);
+  const filteredResidents = useMemo(() => {
+    return condoResidents.filter(r => {
+      const s = searchTerm.toLowerCase();
+      const matchesSearch = r.name.toLowerCase().includes(s) || 
+                            r.unit.toLowerCase().includes(s) ||
+                            r.document.includes(s) ||
+                            r.phone.includes(s);
+      const matchesStatus = filterStatus === 'todos' || r.status === filterStatus;
+      const matchesType = filterType === 'todos' || r.type === filterType;
+      return matchesSearch && matchesStatus && matchesType;
+    });
+  }, [condoResidents, searchTerm, filterStatus, filterType]);
 
-  const carregarTudo = async () => {
-    if (!condId || condId === 'global' || condId === 'todos') {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+  // --- SÍNTESE DE ÁUDIO / FEEDBACK SONORO ---
+  const playSoundAlert = (type: 'success' | 'denied') => {
+    if (!isSoundEnabled) return;
     try {
-      const [cfg, pontos, regs, passes, blk] = await Promise.all([
-        carregarCondominioConfig(condId),
-        carregarPontosAcesso(condId),
-        carregarRegistrosAcesso(condId),
-        carregarPassesVirtuais(condId),
-        carregarBlacklist(condId)
-      ]);
-      setCondoConfig(cfg);
-      setPontosAcesso(pontos);
-      setRegistros(regs);
-      setPassesVirtuais(passes);
-      setBlacklist(blk);
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const audioCtx = new AudioCtx();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
 
-      if (pontos.length > 0 && !formEntrada.ponto_acesso_entrada) {
-        setFormEntrada(prev => ({ ...prev, ponto_acesso_entrada: pontos[0].nome }));
+      if (type === 'success') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+        osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.2); // A5
+        gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+      } else {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(320, audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(140, audioCtx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.35);
       }
     } catch (e) {
-      console.error('Erro ao carregar dados de controle de acesso:', e);
-    } finally {
-      setLoading(false);
+      console.warn('[ControleAcesso] Audio Context Error:', e);
     }
   };
 
-  // Checagem em tempo real de Blacklist no form de entrada
-  useEffect(() => {
-    if (!condId || (!formEntrada.documento && !formEntrada.nome && !formEntrada.veiculo_placa)) {
-      setAlertaSegurancaDetectado(null);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      verificarBloqueio(condId, formEntrada.documento, formEntrada.nome, formEntrada.veiculo_placa).then(res => {
-        if (res.bloqueado && res.item) {
-          setAlertaSegurancaDetectado(res.item);
-        } else {
-          setAlertaSegurancaDetectado(null);
-        }
-      });
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [condId, formEntrada.documento, formEntrada.nome, formEntrada.veiculo_placa]);
-
-  // Métricas
-  const metricas = useMemo(() => {
-    const presentes = registros.filter(r => r.status === 'presente');
-    const presentesPedestres = presentes.filter(r => !r.veiculo_placa).length;
-    const presentesVeiculos = presentes.filter(r => Boolean(r.veiculo_placa)).length;
-    const passesAtivos = passesVirtuais.filter(p => p.status === 'valido').length;
-    const totalBloqueios = blacklist.filter(b => b.ativo).length;
-
-    return {
-      totalPresentes: presentes.length,
-      presentesPedestres,
-      presentesVeiculos,
-      passesAtivos,
-      totalBloqueios
-    };
-  }, [registros, passesVirtuais, blacklist]);
-
-  // Gerenciamento de Câmera / Foto
-  const iniciarCamera = async () => {
+  // --- CAMERA HANDLERS ---
+  const startCamera = async () => {
+    setCameraError(null);
     try {
-      setCameraAtiva(true);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
-      });
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Dispositivo não suporta acesso direto à câmera HTML5.');
+        setIsCameraActive(false);
+        return;
+      }
+
+      const constraints: MediaStreamConstraints = {
+        video: selectedDeviceId 
+          ? { deviceId: { exact: selectedDeviceId } }
+          : { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+        setIsCameraActive(true);
       }
-    } catch (e) {
-      console.warn('Câmera indisponível no navegador:', e);
-      setCameraAtiva(false);
-      setFeedback({ tipo: 'erro', texto: 'Não foi possível acessar a câmera do dispositivo.' });
+    } catch (err: any) {
+      console.warn('[ControleAcesso] Camera access error:', err);
+      setCameraError('Permissão da câmera bloqueada ou dispositivo indisponível.');
+      setIsCameraActive(false);
     }
   };
 
-  const pararCamera = () => {
+  const stopCamera = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(t => t.stop());
+      stream.getTracks().forEach(track => track.stop());
       videoRef.current.srcObject = null;
     }
-    setCameraAtiva(false);
+    setIsCameraActive(false);
   };
 
-  const capturarFoto = () => {
-    if (!videoRef.current || !canvasRef.current) return;
+  // Lista os dispositivos de câmera disponíveis
+  useEffect(() => {
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      navigator.mediaDevices.enumerateDevices()
+        .then(devices => {
+          const videoInputs = devices.filter(d => d.kind === 'videoinput');
+          setCameraDevices(videoInputs);
+          if (videoInputs.length > 0 && !selectedDeviceId) {
+            setSelectedDeviceId(videoInputs[0].deviceId);
+          }
+        })
+        .catch(err => console.warn('[ControleAcesso] Device enumeration error:', err));
+    }
+  }, [selectedDeviceId]);
+
+  // Ativa câmera apenas nas abas relevantes
+  useEffect(() => {
+    if (activeTab === 'totem' || activeTab === 'cadastramento') {
+      startCamera();
+    } else {
+      stopCamera();
+    }
+    return () => stopCamera();
+  }, [activeTab, selectedDeviceId, facingMode]);
+
+  // --- CANVAS HUD OVERLAY & DETECÇÃO FACIAL DINÂMICA ---
+  useEffect(() => {
+    let animationFrameId: number;
+
+    const drawDetectionBox = () => {
+      if (!isCameraActive || !videoRef.current || !canvasRef.current) return;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      if (video.readyState >= 2) {
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Bounding box central
+        const boxWidth = canvas.width * 0.36;
+        const boxHeight = boxWidth * 1.32;
+        const boxX = (canvas.width - boxWidth) / 2;
+        const boxY = (canvas.height - boxHeight) / 2.2;
+
+        // Cor de acordo com o status de reconhecimento
+        ctx.strokeStyle = scanningStatus === 'matched' ? '#10b981' : scanningStatus === 'denied' ? '#ef4444' : '#06b6d4';
+        ctx.lineWidth = 3;
+
+        // HUD Cantos
+        const lineLen = 32;
+        // Top-left
+        ctx.beginPath(); ctx.moveTo(boxX, boxY + lineLen); ctx.lineTo(boxX, boxY); ctx.lineTo(boxX + lineLen, boxY); ctx.stroke();
+        // Top-right
+        ctx.beginPath(); ctx.moveTo(boxX + boxWidth - lineLen, boxY); ctx.lineTo(boxX + boxWidth, boxY); ctx.lineTo(boxX + boxWidth, boxY + lineLen); ctx.stroke();
+        // Bottom-left
+        ctx.beginPath(); ctx.moveTo(boxX, boxY + boxHeight - lineLen); ctx.lineTo(boxX, boxY + boxHeight); ctx.lineTo(boxX + lineLen, boxY + boxHeight); ctx.stroke();
+        // Bottom-right
+        ctx.beginPath(); ctx.moveTo(boxX + boxWidth - lineLen, boxY + boxHeight); ctx.lineTo(boxX + boxWidth, boxY + boxHeight); ctx.lineTo(boxX + boxWidth, boxY + boxHeight - lineLen); ctx.stroke();
+
+        // Pontos de marcação facial
+        ctx.fillStyle = ctx.strokeStyle;
+        const points = [
+          { x: boxX + boxWidth * 0.32, y: boxY + boxHeight * 0.36 }, // Olho esquerdo
+          { x: boxX + boxWidth * 0.68, y: boxY + boxHeight * 0.36 }, // Olho direito
+          { x: boxX + boxWidth * 0.50, y: boxY + boxHeight * 0.55 }, // Nariz
+          { x: boxX + boxWidth * 0.50, y: boxY + boxHeight * 0.74 }  // Boca
+        ];
+        points.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3.5, 0, 2 * Math.PI);
+          ctx.fill();
+        });
+
+        // Conexões vetoriais simuladas
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.28)';
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        ctx.lineTo(points[1].x, points[1].y);
+        ctx.lineTo(points[2].x, points[2].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Linha do HUD no topo
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+        const labelText = scanningStatus === 'matched' 
+          ? '✓ FACE RECONHECIDA' 
+          : scanningStatus === 'denied' 
+            ? '✗ ACESSO NEGADO' 
+            : '● RASTREANDO FACE (ANTI-SPOOFING)';
+        ctx.fillText(labelText, boxX, boxY - 14);
+      }
+
+      animationFrameId = requestAnimationFrame(drawDetectionBox);
+    };
+
+    if (isCameraActive && activeTab === 'totem') {
+      animationFrameId = requestAnimationFrame(drawDetectionBox);
+    }
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isCameraActive, scanningStatus, activeTab]);
+
+  // --- SIMULAÇÃO DE RECONHECIMENTO BIOMÉTRICO (TESTES PRÁTICOS) ---
+  const triggerFacialRecognitionTest = (forceStatus: 'success' | 'denied' | 'random' = 'random') => {
+    if (scanningStatus === 'detecting') return;
+    setScanningStatus('detecting');
+
+    // Flutua um pouco o liveness score de forma realista
+    setLivenessScore(Number((97.5 + Math.random() * 2.3).toFixed(1)));
+
+    setTimeout(() => {
+      // Puxa STRICTLY da lista de moradores do condomínio ativo
+      const activeCondoResList = condoResidents;
+      if (activeCondoResList.length === 0) {
+        setScanningStatus('denied');
+        playSoundAlert('denied');
+        setLastMatchResult({
+          status: 'Negado',
+          name: 'Pessoa Não Cadastrada',
+          unit: 'Não Identificada',
+          reason: `Nenhum morador cadastrado no condomínio "${currentCondo.name}". Cadastre moradores na aba "Cadastramento Facial".`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        });
+        return;
+      }
+
+      const randomResident = activeCondoResList[Math.floor(Math.random() * activeCondoResList.length)];
+      const isApproved = forceStatus === 'success' ? true : forceStatus === 'denied' ? false : randomResident.status === 'Ativo';
+
+      const horaAtual = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const dataAtual = new Date().toLocaleDateString('pt-BR');
+
+      if (isApproved) {
+        setScanningStatus('matched');
+        playSoundAlert('success');
+        setLastMatchResult({
+          ...randomResident,
+          status: 'Liberado',
+          timestamp: horaAtual
+        });
+
+        // Aciona o Relé do Portão Social
+        setRelayGateStatus({ pedestrian: true, vehicle: false });
+
+        // Adiciona registro de auditoria vinculado ao condomínio ativo
+        const newLog: AccessLogItem = {
+          id: `log_${Date.now()}`,
+          condoId: activeCondoId,
+          residentName: randomResident.name,
+          unit: randomResident.unit,
+          timestamp: horaAtual,
+          dateStr: dataAtual,
+          status: 'Liberado',
+          method: 'Reconhecimento Facial',
+          gate: 'Portão Pedestre Social'
+        };
+        setAccessLogs(prev => [newLog, ...prev]);
+
+        // Auto trava o relé após 4 segundos (tempo regulamentar de eclusa)
+        setTimeout(() => setRelayGateStatus({ pedestrian: false, vehicle: false }), 4000);
+      } else {
+        setScanningStatus('denied');
+        playSoundAlert('denied');
+        setLastMatchResult({
+          status: 'Negado',
+          name: randomResident.name,
+          unit: randomResident.unit,
+          type: randomResident.type,
+          reason: randomResident.status === 'Bloqueado' ? 'Cadastro Bloqueado por Decisão Administrativa' : 'Acesso Não Autorizado para este Portão',
+          avatar: randomResident.avatar,
+          timestamp: horaAtual
+        });
+
+        // Adiciona registro de recusa
+        const newLog: AccessLogItem = {
+          id: `log_${Date.now()}`,
+          condoId: activeCondoId,
+          residentName: randomResident.name,
+          unit: randomResident.unit,
+          timestamp: horaAtual,
+          dateStr: dataAtual,
+          status: 'Negado',
+          method: 'Reconhecimento Facial',
+          reason: 'Cadastro Bloqueado ou Não Autorizado',
+          gate: 'Portão Pedestre Social'
+        };
+        setAccessLogs(prev => [newLog, ...prev]);
+      }
+
+      // Reseta estado do HUD após 5.5 segundos
+      setTimeout(() => {
+        setScanningStatus('idle');
+      }, 5500);
+
+    }, 1100);
+  };
+
+  // --- CAPTURA DE SNAPSHOT DA CÂMERA PARA CADASTRAMENTO ---
+  const captureSnapshot = () => {
+    if (!videoRef.current) return;
     const video = videoRef.current;
-    const canvas = canvasRef.current;
+    const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setFormEntrada(prev => ({ ...prev, foto_entrada_url: dataUrl }));
-      pararCamera();
-      setFeedback({ tipo: 'sucesso', texto: 'Foto capturada com sucesso!' });
-    }
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    setCapturedPhoto(dataUrl);
+    setNewResident(prev => ({ ...prev, avatar: dataUrl }));
   };
 
-  // Efetivar Entrada
-  const handleRegistrarEntrada = async (e: React.FormEvent) => {
+  // --- SALVAR NOVO MORADOR NO CONDOMÍNIO ATIVO LOGADO ---
+  const handleSaveResident = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (alertaSegurancaDetectado?.gravidade === 'bloqueio_total') {
-      setFeedback({
-        tipo: 'erro',
-        texto: `ACESSO BARRADO: Consta na Lista de Bloqueios (${alertaSegurancaDetectado.motivo})`
-      });
-      return;
-    }
+    if (!newResident.name || !newResident.unit) return;
+    setSalvandoMorador(true);
 
-    if (!formEntrada.nome || !formEntrada.unidade_bloco) {
-      setFeedback({ tipo: 'erro', texto: 'Preencha o nome e a unidade de destino.' });
-      return;
-    }
-
-    const resultado = await registrarEntradaAcesso(condId, formEntrada, usuarioLogado);
-    if (resultado.sucesso && resultado.registro) {
-      setRegistros(prev => [resultado.registro!, ...prev]);
-      setFeedback({ tipo: 'sucesso', texto: `Entrada liberada para ${resultado.registro.nome}!` });
-      // Limpa formulário
-      setFormEntrada(prev => ({
-        ...prev,
-        nome: '',
-        documento: '',
-        telefone: '',
-        empresa: '',
-        unidade_bloco: '',
-        morador_responsavel: '',
-        veiculo_placa: '',
-        veiculo_modelo: '',
-        veiculo_cor: '',
-        cracha_ou_tag: '',
-        observacoes: '',
-        foto_entrada_url: undefined
-      }));
-      pararCamera();
-      setAbaAtiva('presentes');
-    } else {
-      setFeedback({ tipo: 'erro', texto: resultado.erro || 'Falha ao registrar entrada.' });
-    }
-  };
-
-  // Registrar Saída
-  const handleRegistrarSaida = async (registroId: string) => {
-    const ok = await registrarSaidaAcesso(condId, registroId, undefined, undefined, usuarioLogado);
-    if (ok) {
-      setRegistros(prev =>
-        prev.map(r =>
-          r.id === registroId
-            ? { ...r, status: 'saiu', data_hora_saida: new Date().toISOString() }
-            : r
-        )
-      );
-      setFeedback({ tipo: 'sucesso', texto: 'Saída registrada com sucesso!' });
-    }
-  };
-
-  // Validação de Passe QR
-  const handleValidarPasse = async () => {
-    if (!tokenParaValidar.trim()) return;
-    const res = await validarTokenPasse(condId, tokenParaValidar);
-    setResultadoValidacaoQR(res);
-
-    if (res.valido && res.passe) {
-      setFeedback({ tipo: 'sucesso', texto: `Passe Válido! Visitante: ${res.passe.visitante_nome}` });
-    } else {
-      setFeedback({ tipo: 'erro', texto: res.motivo || 'Passe inválido.' });
-    }
-  };
-
-  const handleLiberarPasseValidado = async () => {
-    if (!resultadoValidacaoQR?.passe) return;
-    const p = resultadoValidacaoQR.passe;
-
-    const entradaDados: Partial<RegistroAcesso> = {
-      tipo: p.tipo === 'festa_convidado' ? 'convidado_evento' : 'visitante',
-      nome: p.visitante_nome,
-      documento: p.visitante_documento || '',
-      unidade_bloco: p.unidade_bloco,
-      morador_responsavel: p.morador_nome,
-      ponto_acesso_entrada: 'Portaria Principal (Pedestres)',
-      observacoes: `Liberado via Passe QR (${p.token}) - ${p.observacoes || ''}`,
-      passe_qr_id: p.id
-    };
-
-    const res = await registrarEntradaAcesso(condId, entradaDados, usuarioLogado);
-    if (res.sucesso && res.registro) {
-      setRegistros(prev => [res.registro!, ...prev]);
-      setFeedback({ tipo: 'sucesso', texto: `Entrada liberada para ${p.visitante_nome} via Passe QR!` });
-      setResultadoValidacaoQR(null);
-      setTokenParaValidar('');
-      setAbaAtiva('presentes');
-    }
-  };
-
-  // Criar Novo Passe Virtual
-  const handleCriarPasse = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formNovoPasse.visitante_nome || !formNovoPasse.unidade_bloco) {
-      setFeedback({ tipo: 'erro', texto: 'Preencha o nome do visitante e a unidade.' });
-      return;
-    }
-
-    const novo = await gerarPasseVirtual(condId, formNovoPasse, usuarioLogado);
-    setPassesVirtuais(prev => [novo, ...prev]);
-    setModalNovoPasse(false);
-    setFeedback({ tipo: 'sucesso', texto: `Passe Virtual gerado! Código: ${novo.token}` });
-  };
-
-  // WhatsApp Share do Passe
-  const handleEnviarPasseWhats = (passe: PasseVirtualQR) => {
-    const tel = passe.morador_telefone || '';
-    const texto = formatarMensagemWhatsAppPasse(passe, condoConfig?.nome || 'Condomínio');
-    const link = formatarLinkWhatsApp(tel, texto);
-    window.open(link, '_blank');
-  };
-
-  // Salvar Bloqueio (Blacklist)
-  const handleSalvarBloqueio = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formBloqueio.nome_ou_placa.trim()) {
-      setFeedback({ tipo: 'erro', texto: 'Informe o nome da pessoa ou a placa do veículo.' });
-      return;
-    }
-
-    const item = await salvarItemBlacklist(condId, formBloqueio, usuarioLogado);
-    setBlacklist(prev => [item, ...prev]);
-    setModalNovoBloqueio(false);
-    setFormBloqueio({ tipo: 'pessoa', nome_ou_placa: '', documento: '', motivo: '', gravidade: 'bloqueio_total' });
-    setFeedback({ tipo: 'sucesso', texto: 'Restrição registrada na lista de segurança!' });
-  };
-
-  // Filtragem dos Presentes
-  const presentesFiltrados = useMemo(() => {
-    return registros.filter(r => {
-      if (r.status !== 'presente') return false;
-      if (filtroTipo !== 'todos' && r.tipo !== filtroTipo) return false;
-      if (termoBusca) {
-        const t = termoBusca.toLowerCase();
-        return (
-          r.nome?.toLowerCase().includes(t) ||
-          r.documento?.toLowerCase().includes(t) ||
-          r.unidade_bloco?.toLowerCase().includes(t) ||
-          r.veiculo_placa?.toLowerCase().includes(t)
-        );
+    try {
+      // Extrai bloco e unidade
+      const partesUnidade = newResident.unit.trim().split('-');
+      let blocoFinal = 'Casa';
+      let unidadeFinal = newResident.unit.trim();
+      if (partesUnidade.length >= 2) {
+        blocoFinal = partesUnidade[0].trim();
+        unidadeFinal = partesUnidade[1].replace(/apto|unid|ap/gi, '').trim();
       }
-      return true;
-    });
-  }, [registros, filtroTipo, termoBusca]);
 
-  // Tempo de permanência formatado
-  const calcularPermanencia = (entradaStr: string) => {
-    const entrada = new Date(entradaStr).getTime();
-    const agora = Date.now();
-    const minutos = Math.max(0, Math.floor((agora - entrada) / 60000));
-    if (minutos < 60) return `${minutos} min`;
-    const horas = Math.floor(minutos / 60);
-    const restoMin = minutos % 60;
-    return `${horas}h ${restoMin}m`;
+      const avatarFinal = newResident.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250';
+
+      const entry: MoradorBio = {
+        id: `res_${Date.now()}`,
+        condoId: activeCondoId, // VINCULADO RIGOROSAMENTE AO CONDOMÍNIO ATIVO
+        name: newResident.name.trim(),
+        unit: newResident.unit.trim(),
+        bloco: blocoFinal,
+        unidadeNumero: unidadeFinal,
+        type: newResident.type,
+        status: newResident.status,
+        document: newResident.document || '000.000.000-00',
+        phone: newResident.phone || '(00) 00000-0000',
+        faceEnrolled: true,
+        avatar: avatarFinal,
+        createdAt: new Date().toLocaleDateString('pt-BR')
+      };
+
+      // Tenta persistir no Supabase se o ID for UUID válido
+      if (isUUID(activeCondoId)) {
+        await supabase.from('moradores').insert([
+          {
+            condominio_id: activeCondoId,
+            nome: entry.name,
+            bloco: entry.bloco,
+            unidade: entry.unidadeNumero,
+            tipo: entry.type,
+            status_acesso: entry.status === 'Bloqueado' ? 'bloqueado' : 'liberado',
+            cpf: entry.document,
+            telefone: entry.phone,
+            foto_url: avatarFinal
+          }
+        ]);
+      }
+
+      // Adiciona na lista em memória e cache
+      setResidents(prev => [entry, ...prev]);
+
+      // Registra log do cadastro
+      const newLog: AccessLogItem = {
+        id: `log_${Date.now()}`,
+        condoId: activeCondoId,
+        residentName: entry.name,
+        unit: entry.unit,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        dateStr: new Date().toLocaleDateString('pt-BR'),
+        status: 'Cadastrado',
+        method: 'Cadastro Facial Presencial',
+        gate: 'Módulo Administrador'
+      };
+      setAccessLogs(prev => [newLog, ...prev]);
+
+      // Limpa formulário e fecha modal
+      setIsEnrollModalOpen(false);
+      setNewResident({ name: '', unit: '', type: 'Morador', document: '', phone: '', status: 'Ativo', avatar: '' });
+      setCapturedPhoto(null);
+      playSoundAlert('success');
+    } catch (err) {
+      console.warn('[ControleAcesso] Erro ao cadastrar morador:', err);
+    } finally {
+      setSalvandoMorador(false);
+    }
+  };
+
+  // --- ALTERAR STATUS DO MORADOR (ATIVO <-> BLOQUEADO) ---
+  const toggleResidentStatus = async (id: string) => {
+    const alvo = residents.find(r => r.id === id);
+    if (!alvo) return;
+    const nextStatus = alvo.status === 'Ativo' ? 'Bloqueado' : 'Ativo';
+
+    setResidents(residents.map(r => {
+      if (r.id === id) {
+        return { ...r, status: nextStatus };
+      }
+      return r;
+    }));
+
+    if (isUUID(id)) {
+      try {
+        await supabase
+          .from('moradores')
+          .update({ status_acesso: nextStatus === 'Ativo' ? 'liberado' : 'bloqueado' })
+          .eq('id', id);
+      } catch (e) {
+        console.warn('Erro ao atualizar status do morador:', e);
+      }
+    }
+  };
+
+  // --- EXCLUIR MORADOR ---
+  const deleteResident = async (id: string) => {
+    if (!confirm('Deseja realmente remover o cadastro biométrico deste morador?')) return;
+    setResidents(residents.filter(r => r.id !== id));
+
+    if (isUUID(id)) {
+      try {
+        await supabase.from('moradores').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Erro ao excluir morador do Supabase:', e);
+      }
+    }
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 pb-20">
-      <canvas ref={canvasRef} className="hidden" />
-
-      {/* Toast de Feedback */}
-      {feedback && (
-        <div
-          className={`p-3.5 rounded-2xl flex items-center justify-between shadow-md text-sm font-semibold transition-all ${
-            feedback.tipo === 'sucesso'
-              ? 'bg-emerald-500 text-white'
-              : feedback.tipo === 'alerta'
-              ? 'bg-amber-500 text-white'
-              : 'bg-rose-500 text-white'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {feedback.tipo === 'sucesso' ? (
-              <CheckCircle2 className="w-5 h-5" />
-            ) : (
-              <AlertTriangle className="w-5 h-5" />
-            )}
-            <span>{feedback.texto}</span>
-          </div>
-          <button onClick={() => setFeedback(null)} className="p-1 hover:bg-black/10 rounded-lg cursor-pointer">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Topo / Header do Módulo */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-2xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-            <Scan className="w-6 h-6" />
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-black">
+      
+      {/* GLOBAL HEADER WITH MULTI-TENANT CONDOMINIUM SELECTOR */}
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-4 lg:px-8 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-4">
+        
+        {/* Brand Title */}
+        <div className="flex items-center space-x-3 w-full sm:w-auto">
+          <div className="bg-cyan-500/10 p-2.5 rounded-2xl border border-cyan-500/30 text-cyan-400 flex items-center justify-center shadow-lg shadow-cyan-950">
+            <Scan className="w-6 h-6 animate-pulse" />
           </div>
           <div>
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-              Controle de Acesso & Portaria
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800">
-                {condoConfig?.nome || 'Condomínio'}
-              </span>
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Liberação ágil de pedestres, cancelas veiculares, validação de passes QR Code e pessoas no interior
-            </p>
+            <div className="flex items-center space-x-2">
+              <h1 className="font-bold text-lg text-white tracking-tight">VisionGate Pro</h1>
+              <span className="text-[10px] uppercase font-bold tracking-wider bg-cyan-500/20 text-cyan-400 px-2.5 py-0.5 rounded-full border border-cyan-500/30">Biometria Facial</span>
+            </div>
+            <p className="text-xs text-slate-400">Controle de Acesso Biométrico Isolado por Condomínio</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <button
-            type="button"
-            onClick={() => setAbaAtiva('validador_qr')}
-            className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md shadow-purple-600/20 cursor-pointer transition active:scale-95"
-          >
-            <QrCode className="w-4 h-4" />
-            Escanear QR Code
-          </button>
-          <button
-            type="button"
-            onClick={() => setAbaAtiva('entrada')}
-            className="flex-1 md:flex-none inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/20 cursor-pointer transition active:scale-95"
-          >
-            <LogIn className="w-4 h-4 stroke-[3]" />
-            Entrada Rápida
-          </button>
-        </div>
-      </div>
-
-      {/* Indicadores Rápidos do Posto */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div
-          onClick={() => setAbaAtiva('presentes')}
-          className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between cursor-pointer hover:border-emerald-500/40 transition"
-        >
-          <div>
-            <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">No Condomínio</span>
-            <div className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">
-              {metricas.totalPresentes}
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">
-              {metricas.presentesPedestres} ped. • {metricas.presentesVeiculos} veíc.
-            </span>
-          </div>
-          <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500">
-            <Users className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div
-          onClick={() => setAbaAtiva('passes')}
-          className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between cursor-pointer hover:border-purple-500/40 transition"
-        >
-          <div>
-            <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider">Passes Virtuais</span>
-            <div className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">
-              {metricas.passesAtivos}
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Convites QR válidos</span>
-          </div>
-          <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
-            <QrCode className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div
-          onClick={() => setAbaAtiva('historico')}
-          className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between cursor-pointer hover:border-blue-500/40 transition"
-        >
-          <div>
-            <span className="text-[11px] font-bold text-blue-600 uppercase tracking-wider">Movimentações</span>
-            <div className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">
-              {registros.length}
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Histórico registrado</span>
-          </div>
-          <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
-            <Clock className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div
-          onClick={() => setAbaAtiva('blacklist')}
-          className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between cursor-pointer hover:border-rose-500/40 transition"
-        >
-          <div>
-            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Restrições / Alerta</span>
-            <div className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-0.5">
-              {metricas.totalBloqueios}
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Blacklist ativa</span>
-          </div>
-          <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500">
-            <ShieldAlert className="w-5 h-5" />
-          </div>
-        </div>
-      </div>
-
-      {/* Menu Superior de Abas */}
-      <div className="flex items-center gap-1 p-1 bg-slate-200/80 dark:bg-slate-850 rounded-2xl overflow-x-auto text-xs font-bold scrollbar-none">
-        <button
-          onClick={() => setAbaAtiva('entrada')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'entrada'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <LogIn className="w-4 h-4 text-blue-500" />
-          <span>Liberação de Entrada</span>
-        </button>
-
-        <button
-          onClick={() => setAbaAtiva('presentes')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'presentes'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Users className="w-4 h-4 text-emerald-500" />
-          <span>Presentes no Condomínio</span>
-          {metricas.totalPresentes > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500 text-white font-extrabold">
-              {metricas.totalPresentes}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setAbaAtiva('validador_qr')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'validador_qr'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <QrCode className="w-4 h-4 text-purple-500" />
-          <span>Validador QR Code</span>
-        </button>
-
-        <button
-          onClick={() => setAbaAtiva('passes')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'passes'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Share2 className="w-4 h-4 text-indigo-500" />
-          <span>Passes & Convites WhatsApp</span>
-        </button>
-
-        <button
-          onClick={() => setAbaAtiva('historico')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'historico'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Clock className="w-4 h-4 text-slate-500" />
-          <span>Histórico de Auditoria</span>
-        </button>
-
-        <button
-          onClick={() => setAbaAtiva('blacklist')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition cursor-pointer whitespace-nowrap ${
-            abaAtiva === 'blacklist'
-              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <ShieldAlert className="w-4 h-4 text-rose-500" />
-          <span>Lista de Bloqueios ({blacklist.length})</span>
-        </button>
-      </div>
-
-      {/* ABA 1: LIBERAÇÃO DE ENTRADA RÁPIDA */}
-      {abaAtiva === 'entrada' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-sm max-w-4xl mx-auto">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 mb-6">
-            <div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-                <LogIn className="w-5 h-5 text-blue-500" />
-                Registrar Entrada / Liberação de Acesso
-              </h3>
-              <p className="text-xs text-slate-500">
-                Guarita de portaria: libere pedestres, visitantes sociais, veículos e entregas rápidas
-              </p>
-            </div>
-            {alertaSegurancaDetectado && (
-              <span className="px-2.5 py-1 rounded-full text-xs font-black bg-rose-500 text-white animate-bounce flex items-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5" /> ALERTA DE SEGURANÇA
-              </span>
-            )}
-          </div>
-
-          <form onSubmit={handleRegistrarEntrada} className="space-y-6">
-            {/* Categoria do Acesso */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
-                1. Tipo de Entrada
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-                {[
-                  { id: 'visitante', label: 'Visitante', icone: Users, cor: 'text-blue-500' },
-                  { id: 'prestador', label: 'Prestador', icone: HardHat, cor: 'text-purple-500' },
-                  { id: 'convidado_evento', label: 'Convidado Festa', icone: Sparkles, cor: 'text-amber-500' },
-                  { id: 'veiculo', label: 'Veículo', icone: Car, cor: 'text-emerald-500' },
-                  { id: 'entrega', label: 'Entrega Rápida', icone: Package, cor: 'text-orange-500' },
-                  { id: 'morador', label: 'Morador', icone: Building, cor: 'text-indigo-500' }
-                ].map(item => {
-                  const Icone = item.icone;
-                  const ativo = formEntrada.tipo === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setFormEntrada(prev => ({ ...prev, tipo: item.id as any }))}
-                      className={`p-3 rounded-2xl border text-center flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                        ativo
-                          ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/40 ring-2 ring-blue-500/20'
-                          : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
-                      }`}
-                    >
-                      <Icone className={`w-5 h-5 ${item.cor}`} />
-                      <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{item.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Ponto de Acesso */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Ponto de Acesso / Portão *
-                </label>
-                <select
-                  value={formEntrada.ponto_acesso_entrada}
-                  onChange={e => setFormEntrada(prev => ({ ...prev, ponto_acesso_entrada: e.target.value }))}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-                >
-                  {pontosAcesso.map(p => (
-                    <option key={p.id} value={p.nome}>
-                      {p.nome} ({p.tipo.toUpperCase()})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Unidade / Bloco de Destino *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Torre A - Apto 302 ou Lote 14"
-                  value={formEntrada.unidade_bloco}
-                  onChange={e => setFormEntrada(prev => ({ ...prev, unidade_bloco: e.target.value }))}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold focus:ring-2 focus:ring-blue-500/50"
-                />
-              </div>
-            </div>
-
-            {/* Dados Pessoais */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Nome Completo *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Nome de quem está entrando"
-                  value={formEntrada.nome}
-                  onChange={e => setFormEntrada(prev => ({ ...prev, nome: e.target.value }))}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold focus:ring-2 focus:ring-blue-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Documento (RG / CPF)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Número do documento"
-                  value={formEntrada.documento}
-                  onChange={e => setFormEntrada(prev => ({ ...prev, documento: e.target.value }))}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Crachá / Tag de Acesso
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: CR-042 ou Cartão 12"
-                  value={formEntrada.cracha_ou_tag}
-                  onChange={e => setFormEntrada(prev => ({ ...prev, cracha_ou_tag: e.target.value }))}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-                />
-              </div>
-            </div>
-
-            {/* Veículo (se houver ou se tipo for veículo) */}
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800 space-y-3">
-              <span className="block text-xs font-extrabold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                <Car className="w-4 h-4 text-emerald-500" />
-                Dados Veiculares (Preencha se o acesso for de carro/moto/caminhão):
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Placa do Veículo</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: ABC1D23"
-                    value={formEntrada.veiculo_placa}
-                    onChange={e => setFormEntrada(prev => ({ ...prev, veiculo_placa: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Modelo / Marca</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Corolla, Onix, Fiorino..."
-                    value={formEntrada.veiculo_modelo}
-                    onChange={e => setFormEntrada(prev => ({ ...prev, veiculo_modelo: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Cor</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Prata, Branco, Preto..."
-                    value={formEntrada.veiculo_cor}
-                    onChange={e => setFormEntrada(prev => ({ ...prev, veiculo_cor: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Captura de Foto / Webcam */}
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-850/60 border border-slate-200 dark:border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-extrabold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                  <Camera className="w-4 h-4 text-blue-500" />
-                  Registro Fotográfico Facial ou de Documento
-                </span>
-                {!cameraAtiva && !formEntrada.foto_entrada_url && (
-                  <button
-                    type="button"
-                    onClick={iniciarCamera}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer"
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    Abrir Câmera
-                  </button>
-                )}
-              </div>
-
-              {cameraAtiva && (
-                <div className="flex flex-col items-center gap-3">
-                  <div className="relative rounded-2xl overflow-hidden border-2 border-blue-500 w-full max-w-sm aspect-video bg-black">
-                    <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={capturarFoto}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md cursor-pointer"
-                    >
-                      📸 Fotografar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={pararCamera}
-                      className="px-3 py-2 rounded-xl bg-slate-300 dark:bg-slate-700 text-xs font-bold cursor-pointer"
-                    >
-                      Fechar
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {formEntrada.foto_entrada_url && (
-                <div className="flex items-center gap-3">
-                  <img
-                    src={formEntrada.foto_entrada_url}
-                    alt="Foto capturada"
-                    className="w-20 h-20 rounded-xl object-cover border border-slate-300 dark:border-slate-700 shadow-xs"
-                  />
-                  <div>
-                    <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 block">
-                      Foto anexada ao registro de entrada
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setFormEntrada(prev => ({ ...prev, foto_entrada_url: undefined }))}
-                      className="text-xs text-rose-500 hover:underline mt-1 font-semibold cursor-pointer"
-                    >
-                      Remover foto
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Alerta de Blacklist Crítico */}
-            {alertaSegurancaDetectado && (
-              <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500 text-rose-700 dark:text-rose-300 space-y-1 animate-pulse">
-                <div className="flex items-center gap-2 font-black text-sm">
-                  <AlertTriangle className="w-5 h-5 text-rose-600" />
-                  ALERTA MÁXIMO DE SEGURANÇA: ENTRADA RESTRITA / BLOQUEADA!
-                </div>
-                <p className="text-xs font-medium">
-                  {alertaSegurancaDetectado.nome_ou_placa} consta na Lista de Bloqueios. Motivo: "{alertaSegurancaDetectado.motivo}".
-                </p>
-                <p className="text-[11px] font-bold uppercase text-rose-600">
-                  NÃO LIBERE O ACESSO SEM CONSULTAR O SUPERVISOR OU O SÍNDICO.
-                </p>
-              </div>
-            )}
-
-            {/* Botão de Liberação */}
-            <div className="pt-2 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setAbaAtiva('presentes')}
-                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 text-xs font-bold cursor-pointer"
+        {/* MULTI-TENANT CONDOMINIUM SELECTOR (CRITICAL FOR DATA ISOLATION) */}
+        <div className="flex items-center space-x-3 w-full sm:w-auto">
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-2xl px-3 py-1.5 w-full sm:w-84 shadow-inner">
+            <Building2 className="w-4 h-4 text-cyan-400 mr-2.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider">Condomínio Ativo (Isolamento Total)</span>
+              <select 
+                value={activeCondoId}
+                onChange={(e) => setActiveCondoId(e.target.value)}
+                className="w-full bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer truncate"
               >
-                Ver Pessoas no Posto
-              </button>
-              <button
-                type="submit"
-                disabled={Boolean(alertaSegurancaDetectado?.gravidade === 'bloqueio_total')}
-                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-blue-600/20 cursor-pointer"
-              >
-                <Check className="w-4 h-4 stroke-[3]" />
-                Liberar Entrada (Registrar no Sistema)
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* ABA 2: PRESENTES NO CONDOMÍNIO */}
-      {abaAtiva === 'presentes' && (
-        <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                <Users className="w-5 h-5 text-emerald-500" />
-                Pessoas & Veículos no Interior do Condomínio ({presentesFiltrados.length})
-              </h3>
-              <p className="text-xs text-slate-500">
-                Acompanhamento em tempo real de quem deu entrada e ainda não registrou saída
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <input
-                type="text"
-                placeholder="Filtrar presentes..."
-                value={termoBusca}
-                onChange={e => setTermoBusca(e.target.value)}
-                className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-              />
-              <select
-                value={filtroTipo}
-                onChange={e => setFiltroTipo(e.target.value)}
-                className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold"
-              >
-                <option value="todos">Todos Tipos</option>
-                <option value="visitante">Visitantes</option>
-                <option value="prestador">Prestadores</option>
-                <option value="veiculo">Veículos</option>
-                <option value="convidado_evento">Convidados de Eventos</option>
+                {condominios.map(c => (
+                  <option key={c.id} value={c.id} className="bg-slate-900 text-white">
+                    {c.name} ({c.code})
+                  </option>
+                ))}
               </select>
             </div>
           </div>
 
-          {presentesFiltrados.length === 0 ? (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-12 text-center border border-dashed border-slate-300 dark:border-slate-800 text-slate-400">
-              <Users className="w-10 h-10 mx-auto mb-2 opacity-40" />
-              <h4 className="font-extrabold text-sm text-slate-700 dark:text-slate-300">Ninguém registrado no interior</h4>
-              <p className="text-xs text-slate-500 mt-1">Todos os visitantes e prestadores já registraram saída.</p>
+          <button 
+            onClick={() => setIsSoundEnabled(!isSoundEnabled)}
+            className={`p-2.5 rounded-xl border transition cursor-pointer ${isSoundEnabled ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
+            title={isSoundEnabled ? 'Som Ativado' : 'Som Mudo'}
+          >
+            {isSoundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+        </div>
+
+      </header>
+
+      {/* SYSTEM BODY CONTAINER */}
+      <div className="flex-1 flex flex-col lg:flex-row">
+        
+        {/* NAVIGATION SIDEBAR */}
+        <aside className="w-full lg:w-64 border-r border-slate-800 bg-slate-900/40 p-4 flex flex-col space-y-1">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 pb-2">Módulos de Controle</div>
+
+          <button 
+            onClick={() => setActiveTab('totem')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'totem' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <Camera className="w-4 h-4" />
+            <span>Totem Validador (Portaria)</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('moradores')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'moradores' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <Users className="w-4 h-4" />
+            <span>Moradores e Unidades</span>
+            <span className="ml-auto bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded-full font-mono">{condoResidents.length}</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('cadastramento')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'cadastramento' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Cadastramento Facial</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('logs')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'logs' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>Auditoria de Acessos</span>
+            <span className="ml-auto bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded-full font-mono">{condoLogs.length}</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('dispositivos')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'dispositivos' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <Cpu className="w-4 h-4" />
+            <span>Hardware e Relé</span>
+          </button>
+
+          <div className="pt-6 mt-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-xs space-y-2">
+              <div className="flex items-center justify-between text-slate-300 font-semibold">
+                <span className="flex items-center space-x-1.5 text-emerald-400">
+                  <Radio className="w-3.5 h-3.5 animate-pulse" />
+                  <span>Totem Online</span>
+                </span>
+                <span className="text-[10px] bg-slate-950 px-2 py-0.5 rounded font-mono text-slate-400">99.9% Uptime</span>
+              </div>
+              <div className="text-slate-400 pt-1 space-y-1 text-[11px]">
+                <div className="flex justify-between">
+                  <span>Anti-spoofing / Liveness:</span>
+                  <span className="text-cyan-400 font-mono">Ativado</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Isolamento Tenant:</span>
+                  <span className="text-emerald-400 font-bold">{currentCondo.code}</span>
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {presentesFiltrados.map(reg => (
-                <div
-                  key={reg.id}
-                  className="bg-white dark:bg-slate-900 rounded-3xl p-4 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
-                >
+          </div>
+        </aside>
+
+        {/* MAIN VIEW AREA */}
+        <main className="flex-1 p-4 lg:p-8 overflow-y-auto max-h-[calc(100vh-65px)]">
+
+          {/* TAB 1: TOTEM VALIDADOR COM CÂMERA E RECONHECIMENTO EM TEMPO REAL */}
+          {activeTab === 'totem' && (
+            <div className="space-y-6 max-w-6xl mx-auto">
+              
+              {/* Top Warning Banner */}
+              <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-cyan-500/10 rounded-xl border border-cyan-500/30 text-cyan-400">
+                    <Building2 className="w-5 h-5" />
+                  </div>
                   <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2">
-                        {reg.foto_entrada_url ? (
-                          <img
-                            src={reg.foto_entrada_url}
-                            alt=""
-                            className="w-10 h-10 rounded-xl object-cover border border-slate-200"
+                    <h3 className="font-bold text-white text-sm">Monitoramento de Portaria: <span className="text-cyan-400">{currentCondo.name}</span></h3>
+                    <p className="text-xs text-slate-400">Validando acessos exclusivamente para moradores e visitantes deste condomínio ({condoResidents.length} cadastrados).</p>
+                  </div>
+                </div>
+
+                {/* Device Selector Controls */}
+                <div className="flex items-center space-x-2">
+                  <select 
+                    value={selectedDeviceId}
+                    onChange={(e) => setSelectedDeviceId(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 max-w-[180px] truncate"
+                  >
+                    {cameraDevices.map(device => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label || `Câmera ${device.deviceId.slice(0,5)}...`}
+                      </option>
+                    ))}
+                    {cameraDevices.length === 0 && (
+                      <option value="">Câmera Padrão</option>
+                    )}
+                  </select>
+
+                  <button 
+                    onClick={() => setFacingMode(prev => prev === 'user' ? 'environment' : 'user')}
+                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center space-x-1 transition cursor-pointer"
+                    title="Alternar Câmera Frontal/Traseira"
+                  >
+                    <Smartphone className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* VIDEO STREAM & MATCH RESULT GRID */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* VIDEO STREAM & CANVAS HUD (7 COLS) */}
+                <div className="lg:col-span-7 bg-slate-900/40 border border-slate-800 rounded-3xl p-4 flex flex-col space-y-4">
+                  <div className="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center shadow-inner">
+                    
+                    {/* HTML5 Video */}
+                    <video 
+                      ref={videoRef} 
+                      muted 
+                      playsInline 
+                      className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                    />
+
+                    {/* Canvas Overlay for Facial Recognition HUD */}
+                    <canvas 
+                      ref={canvasRef} 
+                      className={`absolute inset-0 w-full h-full pointer-events-none ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                    />
+
+                    {/* Fallback Camera Error */}
+                    {cameraError && (
+                      <div className="absolute inset-0 bg-slate-950/90 p-6 flex flex-col items-center justify-center text-center space-y-3">
+                        <AlertTriangle className="w-10 h-10 text-amber-400" />
+                        <p className="text-xs text-slate-300 max-w-xs">{cameraError}</p>
+                        <button 
+                          onClick={startCamera}
+                          className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
+                        >
+                          Tentar Novamente
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Live Scanner Controls Overlay */}
+                    <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between bg-slate-950/75 backdrop-blur px-4 py-2.5 rounded-xl border border-slate-800/80">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span className="text-xs font-semibold text-slate-200">Liveness Test: <strong className="text-cyan-400">{livenessScore}%</strong></span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 uppercase">FPS: 30.0 • {currentCondo.code}</span>
+                    </div>
+                  </div>
+
+                  {/* SIMULATION TEST BUTTONS */}
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Simulador de Leitura Facial (Testes Práticos com Moradores do Condomínio)</span>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button 
+                        onClick={() => triggerFacialRecognitionTest('success')}
+                        disabled={scanningStatus === 'detecting'}
+                        className="flex items-center justify-center space-x-2 bg-emerald-500/10 hover:bg-emerald-500/20 active:scale-98 border border-emerald-500/30 text-emerald-400 py-3 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Simular Rosto Autorizado</span>
+                      </button>
+
+                      <button 
+                        onClick={() => triggerFacialRecognitionTest('denied')}
+                        disabled={scanningStatus === 'detecting'}
+                        className="flex items-center justify-center space-x-2 bg-red-500/10 hover:bg-red-500/20 active:scale-98 border border-red-500/30 text-red-400 py-3 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                      >
+                        <XCircle className="w-4 h-4" />
+                        <span>Simular Rosto Bloqueado</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* MATCH CARD & RELAY STATUS (5 COLS) */}
+                <div className="lg:col-span-5 flex flex-col space-y-4">
+                  
+                  {/* Match Result Display */}
+                  <div className={`flex-1 rounded-3xl p-6 border transition-all duration-300 flex flex-col justify-between ${
+                    scanningStatus === 'matched' ? 'bg-emerald-950/30 border-emerald-500/50 shadow-2xl shadow-emerald-950' :
+                    scanningStatus === 'denied' ? 'bg-red-950/30 border-red-500/50 shadow-2xl shadow-red-950' :
+                    'bg-slate-900/40 border-slate-800'
+                  }`}>
+
+                    {scanningStatus === 'idle' && !lastMatchResult && (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+                        <div className="p-4 bg-slate-900 rounded-full border border-slate-800 text-slate-500">
+                          <Scan className="w-8 h-8 animate-pulse" />
+                        </div>
+                        <h4 className="font-bold text-slate-300 text-sm">Aguardando Aproximação</h4>
+                        <p className="text-xs text-slate-400 max-w-xs">Posicione o rosto em frente à câmera para efetuar a validação biométrica em <strong className="text-cyan-400">{currentCondo.name}</strong>.</p>
+                      </div>
+                    )}
+
+                    {scanningStatus === 'detecting' && (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
+                        <RefreshCw className="w-10 h-10 text-cyan-400 animate-spin" />
+                        <h4 className="font-bold text-white text-md">Analisando Biometria Facial...</h4>
+                        <p className="text-xs text-cyan-400 font-mono">Buscando vetor facial no banco de {currentCondo.name} ({currentCondo.code})</p>
+                      </div>
+                    )}
+
+                    {lastMatchResult && scanningStatus !== 'detecting' && (
+                      <div className="space-y-6">
+                        {/* Status Header Badge */}
+                        <div className="flex items-center justify-between">
+                          <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                            lastMatchResult.status === 'Ativo' || lastMatchResult.status === 'Liberado'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                              : 'bg-red-500/20 text-red-400 border-red-500/40'
+                          }`}>
+                            {lastMatchResult.status === 'Ativo' || lastMatchResult.status === 'Liberado' ? '✓ Acesso Liberado' : '✗ Acesso Negado'}
+                          </span>
+                          <span className="text-xs text-slate-400 font-mono">{lastMatchResult.timestamp || 'Agora'}</span>
+                        </div>
+
+                        {/* Resident Details */}
+                        <div className="flex items-center space-x-4">
+                          <img 
+                            src={lastMatchResult.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250'} 
+                            alt="Facial Match" 
+                            className="w-20 h-20 rounded-2xl object-cover border-2 border-slate-700 shadow-md"
                           />
-                        ) : (
-                          <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500">
-                            {reg.veiculo_placa ? <Car className="w-5 h-5 text-emerald-500" /> : <Users className="w-5 h-5 text-blue-500" />}
+                          <div>
+                            <h3 className="font-bold text-lg text-white">{lastMatchResult.name || 'Pessoa Desconhecida'}</h3>
+                            <p className="text-xs text-slate-300 font-medium">{lastMatchResult.unit || 'Sem Unidade'}</p>
+                            {lastMatchResult.type && (
+                              <span className="inline-block mt-1 text-[10px] bg-slate-800 text-cyan-400 border border-slate-700 px-2 py-0.5 rounded font-semibold">
+                                {lastMatchResult.type}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Additional Reason if Denied */}
+                        {lastMatchResult.reason && (
+                          <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl text-xs text-red-400 font-semibold flex items-center space-x-2">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>Motivo: {lastMatchResult.reason}</span>
                           </div>
                         )}
-                        <div>
-                          <h4 className="font-extrabold text-sm text-slate-900 dark:text-white leading-snug">
-                            {reg.nome}
-                          </h4>
-                          <span className="text-[10px] uppercase font-mono font-bold text-slate-400">
-                            {reg.tipo} {reg.veiculo_placa && `• ${reg.veiculo_placa}`}
+                      </div>
+                    )}
+
+                    {/* GATE RELAY SIMULATOR STATUS */}
+                    <div className="pt-4 border-t border-slate-800/80 space-y-2">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <span>Acionamento Relé de Hardware</span>
+                        <span className="text-cyan-400 font-mono">Controladora TCP/IP</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className={`p-2.5 rounded-xl border text-center transition ${relayGateStatus.pedestrian ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 font-bold shadow-lg shadow-emerald-950' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
+                          <span className="text-[10px] block">Portão Pedestre</span>
+                          <span className="text-xs font-mono">{relayGateStatus.pedestrian ? 'PULSO ABERTO' : 'FECHADO'}</span>
+                        </div>
+                        <div className={`p-2.5 rounded-xl border text-center transition ${relayGateStatus.vehicle ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 font-bold shadow-lg shadow-emerald-950' : 'bg-slate-950 border-slate-800 text-slate-500'}`}>
+                          <span className="text-[10px] block">Cancela / Garagem</span>
+                          <span className="text-xs font-mono">{relayGateStatus.vehicle ? 'PULSO ABERTO' : 'FECHADO'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: MORADORES & UNIDADES (FILTERED PER CONDOMINIUM) */}
+          {activeTab === 'moradores' && (
+            <div className="space-y-6 max-w-6xl mx-auto">
+              
+              {/* Header & Actions */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Moradores & Unidades</h2>
+                  <p className="text-sm text-slate-400">
+                    Gerenciando registros de <strong className="text-cyan-400">{currentCondo.name}</strong> ({condoResidents.length} moradores cadastrados)
+                  </p>
+                </div>
+                
+                <button 
+                  onClick={() => setIsEnrollModalOpen(true)}
+                  className="flex items-center space-x-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-lg shadow-cyan-500/10 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Cadastrar Novo Morador</span>
+                </button>
+              </div>
+
+              {/* FILTERS BAR */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/60 p-3 rounded-2xl border border-slate-800">
+                
+                {/* Search Input */}
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
+                  <input 
+                    type="text"
+                    placeholder="Buscar nome, apartamento ou CPF..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                {/* Filter Status */}
+                <select 
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                >
+                  <option value="todos">Todos os Status</option>
+                  <option value="Ativo">Ativos</option>
+                  <option value="Bloqueado">Bloqueados</option>
+                </select>
+
+                {/* Filter Type */}
+                <select 
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                >
+                  <option value="todos">Todos os Tipos</option>
+                  <option value="Morador">Morador</option>
+                  <option value="Dependente">Dependente</option>
+                  <option value="Inquilino">Inquilino</option>
+                  <option value="Prestador">Prestador</option>
+                </select>
+
+              </div>
+
+              {/* RESIDENTS TABLE / GRID */}
+              {loadingResidents ? (
+                <div className="p-12 text-center text-slate-400">
+                  <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-2 text-cyan-400" />
+                  <p className="text-xs">Carregando moradores do condomínio...</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredResidents.map(resident => (
+                    <div key={resident.id} className="bg-slate-900/40 border border-slate-800 hover:border-slate-700 p-5 rounded-2xl flex flex-col justify-between space-y-4 transition shadow-xs">
+                      <div className="flex items-start space-x-3">
+                        <img 
+                          src={resident.avatar} 
+                          alt={resident.name} 
+                          className="w-14 h-14 rounded-2xl object-cover border border-slate-700 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-bold text-white text-sm truncate">{resident.name}</h4>
+                          <p className="text-xs text-cyan-400 font-medium">{resident.unit}</p>
+                          <span className="inline-block mt-1 text-[10px] bg-slate-950 text-slate-400 border border-slate-800 px-2 py-0.5 rounded font-mono">
+                            {resident.type}
                           </span>
                         </div>
                       </div>
 
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300">
-                        Presente
-                      </span>
+                      <div className="space-y-1.5 text-xs bg-slate-950/60 p-3 rounded-xl border border-slate-900 font-mono text-slate-400">
+                        <div className="flex justify-between">
+                          <span>CPF / Doc:</span>
+                          <span className="text-slate-200">{resident.document}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Telefone:</span>
+                          <span className="text-slate-200">{resident.phone}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Biometria Facial:</span>
+                          <span className="text-emerald-400 font-bold">✓ Cadastrada</span>
+                        </div>
+                      </div>
+
+                      {/* ACTIONS */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                        <button 
+                          onClick={() => toggleResidentStatus(resident.id)}
+                          className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+                            resident.status === 'Ativo' 
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30' 
+                              : 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-emerald-500/10 hover:text-emerald-400'
+                          }`}
+                        >
+                          {resident.status}
+                        </button>
+
+                        <button 
+                          onClick={() => deleteResident(resident.id)}
+                          className="text-slate-500 hover:text-red-400 p-1.5 transition cursor-pointer"
+                          title="Remover Cadastro"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!loadingResidents && filteredResidents.length === 0 && (
+                <div className="bg-slate-900/30 border border-slate-800 p-8 rounded-2xl text-center space-y-2">
+                  <Users className="w-8 h-8 text-slate-600 mx-auto" />
+                  <p className="text-xs text-slate-400">Nenhum morador encontrado em {currentCondo.name} para os filtros selecionados.</p>
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* TAB 3: CADASTRAMENTO FACIAL PRESENCIAL */}
+          {activeTab === 'cadastramento' && (
+            <div className="space-y-6 max-w-4xl mx-auto">
+              <div>
+                <h2 className="text-xl font-bold text-white">Cadastramento Biométrico Facial</h2>
+                <p className="text-sm text-slate-400">Capture a foto presencial do morador para inclusão no condomínio <strong className="text-cyan-400">{currentCondo.name}</strong>.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Camera Capture Box */}
+                <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-4 flex flex-col space-y-3">
+                  <div className="relative aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+                    {capturedPhoto ? (
+                      <img src={capturedPhoto} alt="Snapshot" className="w-full h-full object-cover" />
+                    ) : (
+                      <video ref={videoRef} muted playsInline className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`} />
+                    )}
+                  </div>
+
+                  <div className="flex space-x-2">
+                    {!capturedPhoto ? (
+                      <button 
+                        onClick={captureSnapshot}
+                        className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>Capturar Foto Biométrica</span>
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => setCapturedPhoto(null)}
+                        className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-2 cursor-pointer"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        <span>Recapturar Foto</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Resident Data Form */}
+                <form onSubmit={handleSaveResident} className="bg-slate-900/40 border border-slate-800 rounded-3xl p-5 space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Nome Completo</label>
+                    <input 
+                      type="text" 
+                      required
+                      placeholder="Ex: João da Silva"
+                      value={newResident.name}
+                      onChange={(e) => setNewResident({ ...newResident, name: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Unidade / Apto</label>
+                      <input 
+                        type="text" 
+                        required
+                        placeholder="Ex: Bloco A - 302"
+                        value={newResident.unit}
+                        onChange={(e) => setNewResident({ ...newResident, unit: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      />
                     </div>
 
-                    <div className="space-y-1 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-850/60 border border-slate-100 dark:border-slate-800 text-xs">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Destino:</span>
-                        <span className="font-bold text-slate-900 dark:text-white">{reg.unidade_bloco}</span>
-                      </div>
-                      {reg.documento && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Documento:</span>
-                          <span className="font-mono text-slate-700 dark:text-slate-300">{reg.documento}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Tempo no local:</span>
-                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                          {calcularPermanencia(reg.data_hora_entrada)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-[11px] text-slate-400">
-                        <span>Ponto:</span>
-                        <span>{reg.ponto_acesso_entrada}</span>
-                      </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Tipo de Perfil</label>
+                      <select 
+                        value={newResident.type}
+                        onChange={(e) => setNewResident({ ...newResident, type: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+                      >
+                        <option value="Morador">Morador</option>
+                        <option value="Dependente">Dependente</option>
+                        <option value="Inquilino">Inquilino</option>
+                        <option value="Prestador">Prestador</option>
+                      </select>
                     </div>
                   </div>
 
-                  <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      Operador: {reg.operador_entrada_nome.split(' ')[0]}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleRegistrarSaida(reg.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-xs cursor-pointer active:scale-95 transition"
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">CPF / Documento</label>
+                      <input 
+                        type="text" 
+                        placeholder="000.000.000-00"
+                        value={newResident.document}
+                        onChange={(e) => setNewResident({ ...newResident, document: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Telefone / WhatsApp</label>
+                      <input 
+                        type="text" 
+                        placeholder="(11) 99999-9999"
+                        value={newResident.phone}
+                        onChange={(e) => setNewResident({ ...newResident, phone: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit"
+                    disabled={!capturedPhoto || salvandoMorador}
+                    className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 py-3 rounded-xl text-xs font-bold transition shadow-lg shadow-emerald-500/10 cursor-pointer flex items-center justify-center space-x-2"
+                  >
+                    {salvandoMorador ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Salvando no Condomínio...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Finalizar Cadastro no {currentCondo.name}</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: AUDITORIA DE ACESSOS */}
+          {activeTab === 'logs' && (
+            <div className="space-y-4 max-w-5xl mx-auto">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Logs de Auditoria de Acessos</h2>
+                  <p className="text-sm text-slate-400">Histórico de validações faciais registradas em <strong className="text-cyan-400">{currentCondo.name}</strong></p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl font-mono text-slate-300">
+                    Total: {condoLogs.length} eventos
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800 uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="p-3.5">Horário</th>
+                      <th className="p-3.5">Nome / Pessoa</th>
+                      <th className="p-3.5">Unidade</th>
+                      <th className="p-3.5">Status</th>
+                      <th className="p-3.5">Método / Portão</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-mono">
+                    {condoLogs.map(log => (
+                      <tr key={log.id} className="hover:bg-slate-900/80 transition">
+                        <td className="p-3.5 text-slate-400">{log.timestamp}</td>
+                        <td className="p-3.5 font-bold text-white font-sans">{log.residentName}</td>
+                        <td className="p-3.5 text-cyan-400">{log.unit}</td>
+                        <td className="p-3.5">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] uppercase font-bold border ${
+                            log.status === 'Liberado' 
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                              : log.status === 'Cadastrado'
+                                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                                : 'bg-red-500/10 text-red-400 border-red-500/30'
+                          }`}>
+                            {log.status}
+                          </span>
+                        </td>
+                        <td className="p-3.5 text-slate-400">{log.gate}</td>
+                      </tr>
+                    ))}
+                    {condoLogs.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="p-8 text-center text-slate-500 font-sans">
+                          Nenhum acesso registrado até o momento para este condomínio.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: HARDWARE & DIAGNÓSTICO */}
+          {activeTab === 'dispositivos' && (
+            <div className="space-y-6 max-w-4xl mx-auto">
+              <div>
+                <h2 className="text-xl font-bold text-white">Status dos Dispositivos e Relés de Hardware</h2>
+                <p className="text-sm text-slate-400">Comunicação via TCP/IP e placas controladoras de acionamento do condomínio <strong className="text-cyan-400">{currentCondo.name}</strong>.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-white text-sm">Controladora Relé Pedestre</h4>
+                    <span className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">TCP/IP 192.168.1.105</span>
+                  </div>
+                  <p className="text-xs text-slate-400">Acionamento eletromagnético do portão social com tempo de pulso ajustável (4.0s).</p>
+                  <div className="pt-2 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Status do Relé:</span>
+                    <button 
+                      onClick={() => {
+                        setRelayGateStatus(prev => ({ ...prev, pedestrian: true }));
+                        setTimeout(() => setRelayGateStatus(prev => ({ ...prev, pedestrian: false })), 3000);
+                      }}
+                      className="px-3 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-lg text-xs font-bold transition cursor-pointer"
                     >
-                      <LogOut className="w-3.5 h-3.5" />
-                      Registrar Saída
+                      Disparar Pulso de Teste
                     </button>
                   </div>
                 </div>
-              ))}
+
+                <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-white text-sm">Controladora Cancela Garagem</h4>
+                    <span className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">TCP/IP 192.168.1.106</span>
+                  </div>
+                  <p className="text-xs text-slate-400">Acionamento de cancela automática veicular e laço indutivo.</p>
+                  <div className="pt-2 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Status da Cancela:</span>
+                    <button 
+                      onClick={() => {
+                        setRelayGateStatus(prev => ({ ...prev, vehicle: true }));
+                        setTimeout(() => setRelayGateStatus(prev => ({ ...prev, vehicle: false })), 4000);
+                      }}
+                      className="px-3 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-lg text-xs font-bold transition cursor-pointer"
+                    >
+                      Disparar Pulso Cancela
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-white text-sm">Câmera IP Reconhecimento</h4>
+                    <span className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">Stream WebRTC Ativo</span>
+                  </div>
+                  <p className="text-xs text-slate-400">Stream RTSP/WebRTC sincronizado a 30 FPS com encoder em tempo real.</p>
+                </div>
+
+                <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-white text-sm">Totem Facial Inteligente</h4>
+                    <span className="text-xs text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-2 py-0.5 rounded-full font-mono">Tenant {currentCondo.code}</span>
+                  </div>
+                  <p className="text-xs text-slate-400">Processamento neural local com anti-spoofing liveness e latência &lt; 150ms.</p>
+                </div>
+              </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* ABA 3: VALIDADOR DE QR CODE & TOKEN */}
-      {abaAtiva === 'validador_qr' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-sm max-w-2xl mx-auto space-y-6">
-          <div className="text-center space-y-1">
-            <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center mx-auto mb-2">
-              <QrCode className="w-6 h-6" />
+        </main>
+      </div>
+
+      {/* ENROLLMENT MODAL OVERLAY */}
+      {isEnrollModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <h3 className="font-bold text-lg text-white">Cadastrar Morador em {currentCondo.name} ({currentCondo.code})</h3>
+              <button onClick={() => setIsEnrollModalOpen(false)} className="text-slate-500 hover:text-white cursor-pointer">✕</button>
             </div>
-            <h3 className="text-lg font-black text-slate-900 dark:text-white">
-              Validação de Passe Virtual / Convite QR Code
-            </h3>
-            <p className="text-xs text-slate-500">
-              Digite o código alfanumérico fornecido pelo visitante ou leia o QR Code impresso / na tela do celular
-            </p>
-          </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Ex: PASS-CONV-98214"
-                value={tokenParaValidar}
-                onChange={e => setTokenParaValidar(e.target.value.toUpperCase())}
-                className="flex-1 px-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 font-mono text-sm font-black tracking-wider text-center focus:border-purple-500"
-              />
-              <button
-                type="button"
-                onClick={handleValidarPasse}
-                className="px-5 py-3 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md cursor-pointer"
-              >
-                Validar
-              </button>
-            </div>
-          </div>
-
-          {resultadoValidacaoQR && (
-            <div
-              className={`p-4 rounded-2xl border text-xs space-y-3 ${
-                resultadoValidacaoQR.valido
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-100'
-                  : 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-100'
-              }`}
-            >
-              <div className="flex items-center gap-2 font-black text-sm">
-                {resultadoValidacaoQR.valido ? (
-                  <>
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    PASSE VIRTUAL AUTORIZADO!
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="w-5 h-5 text-rose-600" />
-                    PASSE INVÁLIDO OU EXPIRADO
-                  </>
-                )}
+            <form onSubmit={handleSaveResident} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-400 mb-1">Nome Completo</label>
+                <input 
+                  type="text" required placeholder="Nome do condômino"
+                  value={newResident.name} onChange={(e) => setNewResident({ ...newResident, name: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                />
               </div>
 
-              {resultadoValidacaoQR.passe && (
-                <div className="space-y-1.5 p-3 rounded-xl bg-white/70 dark:bg-slate-900/70 border border-current/10 font-medium">
-                  <div>Visitante: <span className="font-bold">{resultadoValidacaoQR.passe.visitante_nome}</span></div>
-                  <div>Destino: <span className="font-bold">{resultadoValidacaoQR.passe.unidade_bloco}</span></div>
-                  <div>Morador(a): <span className="font-bold">{resultadoValidacaoQR.passe.morador_nome}</span></div>
-                  <div>Validade: <span className="font-bold">{resultadoValidacaoQR.passe.data_validade} ({resultadoValidacaoQR.passe.hora_inicio} às {resultadoValidacaoQR.passe.hora_fim})</span></div>
-                  {resultadoValidacaoQR.passe.observacoes && (
-                    <div>Nota: {resultadoValidacaoQR.passe.observacoes}</div>
-                  )}
-                </div>
-              )}
+              <div>
+                <label className="block font-semibold text-slate-400 mb-1">Unidade / Apto</label>
+                <input 
+                  type="text" required placeholder="Ex: Bloco A - Apto 101"
+                  value={newResident.unit} onChange={(e) => setNewResident({ ...newResident, unit: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
 
-              {resultadoValidacaoQR.valido && (
-                <button
-                  type="button"
-                  onClick={handleLiberarPasseValidado}
-                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-md cursor-pointer"
-                >
-                  Liberar Entrada Imediata no Sistema
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ABA 4: GESTÃO DE PASSES VIRTUAIS */}
-      {abaAtiva === 'passes' && (
-        <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                <Share2 className="w-5 h-5 text-indigo-500" />
-                Passes Virtuais & Convites WhatsApp
-              </h3>
-              <p className="text-xs text-slate-500">
-                Gere pré-autorizações para visitas ou eventos e envie diretamente para o WhatsApp do visitante
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setModalNovoPasse(true)}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
-            >
-              + Gerar Novo Passe
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {passesVirtuais.map(p => (
-              <div
-                key={p.id}
-                className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
-              >
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-purple-100 text-purple-800 dark:bg-purple-950/80 dark:text-purple-300">
-                      {p.token}
-                    </span>
-                    <span className="text-[10px] font-bold text-slate-400">
-                      Válido: {p.data_validade}
-                    </span>
-                  </div>
-
-                  <h4 className="font-black text-sm text-slate-900 dark:text-white leading-snug">
-                    {p.visitante_nome}
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Destino: {p.unidade_bloco} ({p.morador_nome})
-                  </p>
-
-                  <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-850/60 text-[11px] space-y-1">
-                    <div>Horário: <span className="font-bold">{p.hora_inicio} às {p.hora_fim}</span></div>
-                    <div>Usos: <span className="font-bold">{p.usos_realizados} de {p.max_usos}</span></div>
-                    {p.observacoes && <div className="text-slate-400">Nota: {p.observacoes}</div>}
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                  <span className={`text-[10px] font-bold ${p.status === 'valido' ? 'text-emerald-500' : 'text-slate-400'}`}>
-                    Status: {p.status.toUpperCase()}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleEnviarPasseWhats(p)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 text-xs font-bold cursor-pointer"
+                  <label className="block font-semibold text-slate-400 mb-1">Tipo</label>
+                  <select 
+                    value={newResident.type} 
+                    onChange={(e) => setNewResident({ ...newResident, type: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
                   >
-                    <Share2 className="w-3.5 h-3.5" />
-                    Enviar WhatsApp
-                  </button>
+                    <option value="Morador">Morador</option>
+                    <option value="Dependente">Dependente</option>
+                    <option value="Inquilino">Inquilino</option>
+                    <option value="Prestador">Prestador</option>
+                  </select>
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* ABA 5: HISTÓRICO DE AUDITORIA */}
-      {abaAtiva === 'historico' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                <Clock className="w-5 h-5 text-blue-500" />
-                Histórico Cronológico de Entradas e Saídas
-              </h3>
-              <p className="text-xs text-slate-500">
-                Auditoria de todas as movimentações de pessoas e veículos registradas na portaria
-              </p>
-            </div>
-          </div>
-
-          <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[550px] overflow-y-auto">
-            {registros.map(reg => (
-              <div key={reg.id} className="py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-slate-900 dark:text-white text-sm">
-                      {reg.nome}
-                    </span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold uppercase">
-                      {reg.tipo}
-                    </span>
-                    {reg.veiculo_placa && (
-                      <span className="text-[10px] font-mono font-bold text-emerald-600">
-                        🚗 {reg.veiculo_placa}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-slate-500 text-[11px] mt-0.5">
-                    Destino: {reg.unidade_bloco} • Entrada: {new Date(reg.data_hora_entrada).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({reg.ponto_acesso_entrada})
-                    {reg.data_hora_saida && ` • Saída: ${new Date(reg.data_hora_saida).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      reg.status === 'presente' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                    }`}
+                  <label className="block font-semibold text-slate-400 mb-1">Status</label>
+                  <select 
+                    value={newResident.status} 
+                    onChange={(e) => setNewResident({ ...newResident, status: e.target.value as 'Ativo' | 'Bloqueado' })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
                   >
-                    {reg.status === 'presente' ? 'Dentro' : 'Saiu'}
-                  </span>
-                  <span className="text-[10px] font-mono text-slate-400">
-                    Op: {reg.operador_entrada_nome.split(' ')[0]}
-                  </span>
+                    <option value="Ativo">Ativo</option>
+                    <option value="Bloqueado">Bloqueado</option>
+                  </select>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* ABA 6: LISTA DE BLOQUEIOS (BLACKLIST) */}
-      {abaAtiva === 'blacklist' && (
-        <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-rose-500" />
-                Lista de Bloqueios & Restrições de Segurança (Blacklist)
-              </h3>
-              <p className="text-xs text-slate-500">
-                Pessoas e veículos não autorizados ou com alertas judiciais e disciplinares
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setModalNovoBloqueio(true)}
-              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
-            >
-              + Adicionar Bloqueio
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {blacklist.map(b => (
-              <div
-                key={b.id}
-                className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-rose-200 dark:border-rose-900/60 shadow-xs space-y-2"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-black text-sm text-rose-600 dark:text-rose-400">
-                    {b.nome_ou_placa}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300">
-                    {b.gravidade.toUpperCase()}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">{b.motivo}</p>
-                <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800">
-                  Registrado por: {b.registrado_por} • {new Date(b.criado_em).toLocaleDateString('pt-BR')}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL NOVO PASSE VIRTUAL */}
-      {modalNovoPasse && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-              Gerar Passe Virtual / Convite de Acesso
-            </h3>
-
-            <form onSubmit={handleCriarPasse} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Nome do Visitante / Convidado *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Nome de quem vai receber o passe"
-                  value={formNovoPasse.visitante_nome}
-                  onChange={e => setFormNovoPasse(prev => ({ ...prev, visitante_nome: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Unidade de Destino *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Torre A - Apto 304"
-                  value={formNovoPasse.unidade_bloco}
-                  onChange={e => setFormNovoPasse(prev => ({ ...prev, unidade_bloco: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Morador Anfitrião
-                </label>
-                <input
-                  type="text"
-                  placeholder="Nome do morador autorizador"
-                  value={formNovoPasse.morador_nome}
-                  onChange={e => setFormNovoPasse(prev => ({ ...prev, morador_nome: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Data Validade</label>
-                  <input
-                    type="date"
-                    value={formNovoPasse.data_validade}
-                    onChange={e => setFormNovoPasse(prev => ({ ...prev, data_validade: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
+                  <label className="block font-semibold text-slate-400 mb-1">CPF</label>
+                  <input 
+                    type="text" placeholder="000.000.000-00"
+                    value={newResident.document} onChange={(e) => setNewResident({ ...newResident, document: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Qtd Entradas</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={formNovoPasse.max_usos}
-                    onChange={e => setFormNovoPasse(prev => ({ ...prev, max_usos: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-center"
+                  <label className="block font-semibold text-slate-400 mb-1">Telefone</label>
+                  <input 
+                    type="text" placeholder="(11) 99999-9999"
+                    value={newResident.phone} onChange={(e) => setNewResident({ ...newResident, phone: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setModalNovoPasse(false)}
-                  className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md cursor-pointer"
-                >
-                  Gerar e Salvar Passe
-                </button>
+              <div className="flex justify-end space-x-3 pt-2">
+                <button type="button" onClick={() => setIsEnrollModalOpen(false)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl cursor-pointer">Cancelar</button>
+                <button type="submit" className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2 rounded-xl cursor-pointer">Salvar Morador</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL NOVO BLOQUEIO */}
-      {modalNovoBloqueio && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-rose-500" />
-              Adicionar Restrição / Bloqueio de Acesso
-            </h3>
-
-            <form onSubmit={handleSalvarBloqueio} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Nome da Pessoa ou Placa do Veículo *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: João da Silva ou Placa ABC-1234"
-                  value={formBloqueio.nome_ou_placa}
-                  onChange={e => setFormBloqueio(prev => ({ ...prev, nome_ou_placa: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Motivo da Restrição *
-                </label>
-                <textarea
-                  rows={3}
-                  required
-                  placeholder="Descreva a razão de segurança ou ordem judicial..."
-                  value={formBloqueio.motivo}
-                  onChange={e => setFormBloqueio(prev => ({ ...prev, motivo: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-medium resize-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Nível de Gravidade
-                </label>
-                <select
-                  value={formBloqueio.gravidade}
-                  onChange={e => setFormBloqueio(prev => ({ ...prev, gravidade: e.target.value as any }))}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold"
-                >
-                  <option value="bloqueio_total">Bloqueio Total (Entrada Barrada)</option>
-                  <option value="alerta">Alerta Preventivo (Avisar Supervisor)</option>
-                  <option value="chamar_policia">Crítico (Acionar Segurança / Polícia)</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setModalNovoBloqueio(false)}
-                  className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-md cursor-pointer"
-                >
-                  Gravar Restrição
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

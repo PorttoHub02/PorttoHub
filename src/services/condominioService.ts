@@ -898,15 +898,22 @@ export async function carregarCondominioConfig(
   }
 
   try {
-    if (condominioId && typeof condominioId === 'string' && condominioId.trim() !== '') {
-      const condoLista = await cachedQuery<any[]>({
-        table: 'condominios',
-        select: 'id, nome, endereco, tipo_estrutura, qtd_blocos, unidades_por_bloco, nomes_blocos, whatsapp_grupo_url, escala_plantao, horario_diurno_inicio, horario_noturno_inicio, telefone_portaria, sindico_nome, sindico_whatsapp, turnos_plantao',
-        filters: [{ field: 'id', op: 'eq', value: condominioId }],
-        ttlSeconds: 600,
-        condominioId
-      });
-      const data = condoLista && condoLista[0] ? condoLista[0] : null;
+    const isIdValido = condominioId && 
+      typeof condominioId === 'string' && 
+      condominioId.trim() !== '' && 
+      condominioId !== 'todos' && 
+      condominioId !== 'TODOS' && 
+      condominioId !== 'global' && 
+      isUUID(condominioId);
+
+    const condoLista = await cachedQuery<any[]>({
+      table: 'condominios',
+      select: 'id, nome, endereco, tipo_estrutura, qtd_blocos, unidades_por_bloco, nomes_blocos, whatsapp_grupo_url, escala_plantao, horario_diurno_inicio, horario_noturno_inicio, telefone_portaria, sindico_nome, sindico_whatsapp, turnos_plantao',
+      filters: isIdValido ? [{ field: 'id', op: 'eq', value: condominioId }] : [],
+      ttlSeconds: 600,
+      condominioId: isIdValido ? condominioId : undefined
+    });
+    const data = condoLista && condoLista[0] ? condoLista[0] : null;
 
       if (data) {
         defaultConfig.nome = data.nome || defaultConfig.nome;
@@ -967,7 +974,6 @@ export async function carregarCondominioConfig(
       // Também salvar no cache local com TTL para persistência garantida e ultra rápida
       saveCondominioConfigLocal(condominioId, defaultConfig);
       salvarCacheLocal('condo_config', defaultConfig, condominioId, 60);
-    }
     }
   } catch (err) {
     console.warn('Erro ao carregar dados do condomínio no supabase, usando cache local:', err);
@@ -1041,7 +1047,7 @@ export async function salvarCondominioConfig(
       turnos_plantao: turnosPlantaoNovo
     };
 
-    if (condominioId && typeof condominioId === 'string' && condominioId.trim() !== '') {
+    if (condominioId && typeof condominioId === 'string' && condominioId.trim() !== '' && condominioId !== 'todos' && condominioId !== 'global' && isUUID(condominioId)) {
       const { error: errCompleto } = await supabase
         .from('condominios')
         .update(updateCompleto)

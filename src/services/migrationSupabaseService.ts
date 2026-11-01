@@ -421,6 +421,10 @@ export interface MigrationContext {
   targetCondominioId?: string; // Se fornecido e !== 'todos', vincula os dados exclusivamente a este condomínio
   defaultCondominioId?: string; // Se o registro não possuir condomínio_id, vincula a este
   condoMap?: Map<string, string>; // Mapeia IDs/nomes de condomínios antigos para novos UUIDs
+  customColumnMappings?: Record<string, Record<string, string>>; // Mapeamento dinâmico { tabela: { colunaOrigem: colunaDestino } }
+  dryRun?: boolean; // Modo simulação sem persistência física
+  abortSignal?: AbortSignal;
+  targetClient?: any;
 }
 
 /**
@@ -505,6 +509,21 @@ export async function limparBancoDestinoCompleto(
 export function adaptRecordForTargetTable(tableName: string, rawRecord: any, context?: MigrationContext): any {
   if (!rawRecord || typeof rawRecord !== 'object') return rawRecord;
   const item: any = { ...rawRecord };
+
+  // 0.0 Aplicação de Mapeamentos Customizados do Usuário (Aba 3)
+  if (context?.customColumnMappings?.[tableName]) {
+    const tableMapping = context.customColumnMappings[tableName];
+    for (const [srcCol, tgtCol] of Object.entries(tableMapping)) {
+      if (srcCol in item) {
+        if (!tgtCol || tgtCol === '(ignorar)' || tgtCol === '__ignore__') {
+          delete item[srcCol];
+        } else if (tgtCol !== srcCol) {
+          item[tgtCol] = item[srcCol];
+          delete item[srcCol];
+        }
+      }
+    }
+  }
 
   // 0. Resolução estrita de condomínio para evitar misturas entre condomínios
   if (tableName !== 'condominios') {
@@ -1040,6 +1059,23 @@ export async function saveRecordsToSupabase(
     return { success: true, savedCount: 0, errors: [] };
   }
 
+  // 1. Simulação (Dry-Run): valida adaptação sem gravar no banco de dados de destino
+  if (context?.dryRun) {
+    let simulatedCount = 0;
+    for (let i = 0; i < records.length; i++) {
+      if (context.abortSignal?.aborted) {
+        throw new Error('Migração cancelada pelo usuário.');
+      }
+      adaptRecordForTargetTable(tableName, records[i], context);
+      simulatedCount++;
+      if (onProgress && (simulatedCount % 50 === 0 || simulatedCount === records.length)) {
+        onProgress(simulatedCount, records.length);
+      }
+    }
+    return { success: true, savedCount: simulatedCount, errors: [] };
+  }
+
+  const client = context?.targetClient || supabase;
   const BATCH_SIZE = 50;
   let savedCount = 0;
   const errors: string[] = [];
@@ -1051,6 +1087,10 @@ export async function saveRecordsToSupabase(
   }
 
   for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    if (context?.abortSignal?.aborted) {
+      throw new Error('Migração interrompida pelo usuário.');
+    }
+
     const rawChunk = records.slice(i, i + BATCH_SIZE);
     let chunk = rawChunk.map(r => adaptRecordForTargetTable(tableName, r, context));
 
@@ -1059,9 +1099,13 @@ export async function saveRecordsToSupabase(
     const maxAttempts = 15;
 
     while (!batchSuccess && attempts < maxAttempts) {
+      if (context?.abortSignal?.aborted) {
+        throw new Error('Migração interrompida pelo usuário.');
+      }
+
       attempts++;
       try {
-        const { error } = await supabase.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: false });
+        const { error } = await client.from(tableName).upsert(chunk, { onConflict: 'id', ignoreDuplicates: false });
 
         if (!error) {
           batchSuccess = true;
@@ -1274,6 +1318,10 @@ export async function executeFullSupabaseMigration(
     targetCondominioId?: string;
     onBackupProgresso?: (msg: string) => void;
     onLimpezaProgresso?: (msg: string) => void;
+    customColumnMappings?: Record<string, Record<string, string>>;
+    dryRun?: boolean;
+    abortSignal?: AbortSignal;
+    targetCredentials?: SupabaseCredentials;
   }
 ): Promise<{
   totalMigrated: number;
@@ -1334,10 +1382,19 @@ export async function executeFullSupabaseMigration(
     console.warn('Aviso ao mapear condomínios da origem:', err);
   }
 
+  let targetClient: any = undefined;
+  if (opcoes?.targetCredentials && opcoes.targetCredentials.url && opcoes.targetCredentials.key) {
+    targetClient = createSourceSupabaseClient(opcoes.targetCredentials);
+  }
+
   const migrationContext: MigrationContext = {
     targetCondominioId: (opcoes?.targetCondominioId && opcoes.targetCondominioId !== 'todos') ? opcoes.targetCondominioId : undefined,
     defaultCondominioId,
-    condoMap
+    condoMap,
+    customColumnMappings: opcoes?.customColumnMappings,
+    dryRun: opcoes?.dryRun,
+    abortSignal: opcoes?.abortSignal,
+    targetClient
   };
 
   // 4. Ordena as tabelas conforme a prioridade (condomínios e operadores primeiro)
@@ -1588,3 +1645,72 @@ ${jsonBuildParts}
 ) AS porttohub_dump_completo;
 `;
 }
+
+/**
+ * Testa latência real de conexão com um Supabase (origem ou destino)
+ */
+export async function testConnectionLatency(credentials: SupabaseCredentials): Promise<{
+  success: boolean;
+  message: string;
+  latencyMs?: number;
+  projectRef?: string;
+}> {
+  const startTime = performance.now();
+  const testRes = await testSupabaseConnection(credentials);
+  const latencyMs = Math.round(performance.now() - startTime);
+
+  return {
+    ...testRes,
+    latencyMs
+  };
+}
+
+/**
+ * Executa a migração isolada de um único módulo ou tabela
+ */
+export async function executeSingleTableMigration(
+  credentials: SupabaseCredentials,
+  tableName: string,
+  onProgress?: (saved: number, total: number) => void,
+  opcoes?: {
+    customColumnMappings?: Record<string, Record<string, string>>;
+    targetCondominioId?: string;
+    dryRun?: boolean;
+    targetCredentials?: SupabaseCredentials;
+    abortSignal?: AbortSignal;
+  }
+): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    const { records } = await fetchAllSupabaseTableData(credentials, tableName);
+    if (!records || records.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    let targetClient: any = undefined;
+    if (opcoes?.targetCredentials && opcoes.targetCredentials.url && opcoes.targetCredentials.key) {
+      targetClient = createSourceSupabaseClient(opcoes.targetCredentials);
+    }
+
+    const context: MigrationContext = {
+      targetCondominioId: (opcoes?.targetCondominioId && opcoes.targetCondominioId !== 'todos') ? opcoes.targetCondominioId : undefined,
+      customColumnMappings: opcoes?.customColumnMappings,
+      dryRun: opcoes?.dryRun,
+      targetClient,
+      abortSignal: opcoes?.abortSignal
+    };
+
+    const res = await saveRecordsToSupabase(tableName, records, onProgress, context);
+    return {
+      success: res.success,
+      count: res.savedCount,
+      error: res.errors.length > 0 ? res.errors[0] : undefined
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      count: 0,
+      error: err.message || String(err)
+    };
+  }
+}
+

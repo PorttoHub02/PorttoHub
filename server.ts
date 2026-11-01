@@ -567,6 +567,10 @@ app.post('/api/cache/query', async (req, res) => {
     if (filters && Array.isArray(filters)) {
       for (const f of filters) {
         if (!f.field || f.value === undefined) continue;
+        const isUuidField = f.field === 'id' || f.field === 'condominio_id' || f.field.endsWith('_id');
+        if (isUuidField && (f.value === 'todos' || f.value === 'global' || f.value === 'TODOS' || f.value === '')) {
+          continue;
+        }
         const op = f.op || 'eq';
         if (op === 'eq') queryParams.append(f.field, `eq.${f.value}`);
         else if (op === 'neq') queryParams.append(f.field, `neq.${f.value}`);
@@ -586,7 +590,7 @@ app.post('/api/cache/query', async (req, res) => {
     }
 
     const restUrl = `${baseUrl.replace(/\/+$/, '')}/rest/v1/${table}?${queryParams.toString()}`;
-    const supabaseRes = await fetch(restUrl, {
+    let supabaseRes = await fetch(restUrl, {
       method: 'GET',
       headers: {
         'apikey': anonKey,
@@ -597,6 +601,56 @@ app.post('/api/cache/query', async (req, res) => {
 
     if (!supabaseRes.ok) {
       const errText = await supabaseRes.text();
+
+      // Se for erro de coluna ausente (42703 / column does not exist), retenta de forma segura com select=*
+      if (errText.includes('42703') || errText.includes('does not exist')) {
+        console.warn(`[API Cache Query] Coluna inexistente na tabela "${table}". Tentando consulta segura com select=*`);
+        const fallbackUrl = new URL(restUrl);
+        fallbackUrl.searchParams.set('select', '*');
+        try {
+          const fbRes = await fetch(fallbackUrl.toString(), {
+            method: 'GET',
+            headers: {
+              'apikey': anonKey,
+              'Authorization': `Bearer ${anonKey}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          if (fbRes.ok) {
+            const fbData = await fbRes.json();
+            if (Array.isArray(fbData) && table === 'encomendas_itens') {
+              for (const it of fbData) {
+                if (it.codigo_rastreio && !it.codigo_barras) it.codigo_barras = it.codigo_rastreio;
+                if (it.codigo_barras && !it.codigo_rastreio) it.codigo_rastreio = it.codigo_barras;
+              }
+            }
+            const ttlFinal = Number(ttlSeconds) > 0 ? Number(ttlSeconds) : 180;
+            await redisCache.set(cacheKey, JSON.stringify(fbData), ttlFinal, tags);
+            return res.json({
+              sucesso: true,
+              cached: false,
+              origem: 'supabase-safe-columns',
+              latencyMs: Date.now() - start,
+              total: Array.isArray(fbData) ? fbData.length : 1,
+              data: fbData
+            });
+          }
+        } catch {}
+      }
+
+      // Se for erro de sintaxe UUID inválida (22P02 / invalid input syntax for type uuid)
+      if (errText.includes('22P02') || errText.includes('invalid input syntax for type uuid')) {
+        console.warn(`[API Cache Query] Sintaxe UUID inválida na tabela "${table}". Retornando conjunto seguro.`);
+        return res.json({
+          sucesso: true,
+          cached: false,
+          origem: 'fallback-uuid-invalido',
+          latencyMs: Date.now() - start,
+          total: 0,
+          data: []
+        });
+      }
+
       if (supabaseRes.status === 404 && (errText.includes('PGRST205') || errText.includes('schema cache'))) {
         console.warn(`[API Cache Query] Tabela "${table}" pendente no Supabase (PGRST205). Retornando fallback seguro.`);
         const dadosFallback = table === 'condominios' ? [
