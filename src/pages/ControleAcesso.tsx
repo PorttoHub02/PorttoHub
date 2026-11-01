@@ -299,9 +299,37 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
   // --- ABAS DE NAVEGAÇÃO ---
   const [activeTab, setActiveTab] = useState<'totem' | 'moradores' | 'cadastramento' | 'logs' | 'dispositivos'>('totem');
 
-  // --- MODO TELA CHEIA IMERSIVA (TÓTEM / GUICHÊ) ---
+  // --- MODO TELA CHEIA IMERSIVA (TÓTEM / GUICHÊ) & CONTROLE DE ZOOM (0.5x vs 1.0x) ---
   const [isFullscreenTotem, setIsFullscreenTotem] = useState<boolean>(false);
+  const [cameraZoom, setCameraZoom] = useState<number>(0.5); // Padrão 0.5x (visão ampla)
   const totemContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Sincroniza hardware zoom se a câmera física suportar constraints
+  const applyHardwareZoom = useCallback(async (zoomVal: number) => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      try {
+        const stream = videoRef.current.srcObject as MediaStream;
+        const track = stream.getVideoTracks()[0];
+        if (track && (track.getCapabilities as any)) {
+          const caps: any = track.getCapabilities();
+          if (caps && caps.zoom) {
+            const minZ = caps.zoom.min ?? 0.5;
+            const maxZ = caps.zoom.max ?? 3.0;
+            const target = Math.max(minZ, Math.min(maxZ, zoomVal));
+            await (track.applyConstraints as any)({
+              advanced: [{ zoom: target }]
+            });
+          }
+        }
+      } catch (e) {
+        // Fallback gracioso para scale via CSS
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    applyHardwareZoom(cameraZoom);
+  }, [cameraZoom, applyHardwareZoom]);
 
   const toggleFullscreenTotem = () => {
     if (!isFullscreenTotem) {
@@ -309,6 +337,8 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         totemContainerRef.current.requestFullscreen().catch(() => {});
       }
       setIsFullscreenTotem(true);
+      // Ao ativar tela cheia no celular, amplia o visor e ajusta o zoom para 0.5x
+      setCameraZoom(0.5);
     } else {
       if (document.fullscreenElement && document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
@@ -1198,6 +1228,20 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                     <span>Auto-Scan: {autoScanEnabled ? 'ON' : 'OFF'}</span>
                   </button>
 
+                  {/* Zoom Selector 0.5x (Grande Angular) / 1.0x (Padrão) */}
+                  <button 
+                    onClick={() => setCameraZoom(prev => prev === 0.5 ? 1.0 : 0.5)}
+                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold transition flex items-center space-x-1 cursor-pointer ${
+                      cameraZoom === 0.5 
+                        ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 shadow-xs' 
+                        : 'bg-slate-800 border-slate-700 text-slate-300'
+                    }`}
+                    title="Alternar Zoom da Câmera (0.5x Grande Angular / 1.0x Padrão)"
+                  >
+                    <span className="font-mono text-[11px] font-extrabold">{cameraZoom === 0.5 ? '0.5x' : '1.0x'}</span>
+                    <span className="hidden sm:inline text-[10px] uppercase font-semibold">{cameraZoom === 0.5 ? 'Angular' : 'Padrão'}</span>
+                  </button>
+
                   {/* Fullscreen Totem Mode Toggle */}
                   <button
                     onClick={toggleFullscreenTotem}
@@ -1214,21 +1258,35 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
                 
                 {/* VIDEO STREAM & CANVAS HUD (7 COLS) */}
-                <div className="lg:col-span-7 bg-slate-900/40 border border-slate-800 rounded-3xl p-3 sm:p-4 flex flex-col space-y-4">
-                  <div className="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center shadow-inner">
+                <div className={`${isFullscreenTotem ? 'lg:col-span-8' : 'lg:col-span-7'} bg-slate-900/40 border border-slate-800 rounded-3xl p-3 sm:p-4 flex flex-col space-y-4`}>
+                  <div className={`relative w-full bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center shadow-inner transition-all duration-300 ${
+                    isFullscreenTotem 
+                      ? 'h-[72vh] sm:h-[78vh] md:h-[82vh] aspect-auto' 
+                      : 'aspect-video'
+                  }`}>
                     
-                    {/* HTML5 Video with AbortError resilience */}
+                    {/* HTML5 Video with AbortError resilience & 0.5x Zoom */}
                     <video 
                       ref={videoRef} 
                       muted 
                       playsInline 
-                      className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                      className={`w-full h-full ${
+                        cameraZoom === 0.5 ? 'object-contain sm:object-cover' : 'object-cover'
+                      } transition-all duration-300 ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                      style={{
+                        transform: `${facingMode === 'user' ? 'scaleX(-1)' : ''} scale(${cameraZoom === 0.5 ? 0.92 : 1.0})`,
+                        transformOrigin: 'center center'
+                      }}
                     />
 
                     {/* Canvas Overlay for Facial Recognition HUD */}
                     <canvas 
                       ref={canvasRef} 
-                      className={`absolute inset-0 w-full h-full pointer-events-none ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                      className={`absolute inset-0 w-full h-full pointer-events-none transition-all duration-300 ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                      style={{
+                        transform: `${facingMode === 'user' ? 'scaleX(-1)' : ''} scale(${cameraZoom === 0.5 ? 0.92 : 1.0})`,
+                        transformOrigin: 'center center'
+                      }}
                     />
 
                     {/* Picture-in-Picture (PiP) do Rosto Capturado no Momento */}
@@ -1262,6 +1320,13 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                       <div className="flex items-center space-x-2">
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
                         <span className="font-semibold text-slate-200">Liveness: <strong className="text-cyan-400">{livenessScore}%</strong></span>
+                        <button 
+                          onClick={() => setCameraZoom(prev => prev === 0.5 ? 1.0 : 0.5)}
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 cursor-pointer"
+                          title="Alternar Zoom da Câmera"
+                        >
+                          {cameraZoom}x
+                        </button>
                       </div>
                       <span className="font-mono text-slate-400 uppercase text-[10px] sm:text-[11px]">
                         {autoScanEnabled ? 'Auto-Scan Ativo' : 'Manual'} • {currentCondo.code}
