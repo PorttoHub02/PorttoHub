@@ -188,60 +188,19 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         }
       }
 
-      // Se não encontrou no Supabase ou offline, tenta carregar do cache local
+      // Se não encontrou no Supabase, tenta carregar do cache local filtrando apenas moradores reais
       if (listaMapeada.length === 0) {
         const cacheLocal = obterCacheLocal<MoradorBio[]>('moradores_bio', condoIdAlvo, []);
-        if (cacheLocal && cacheLocal.length > 0) {
-          listaMapeada = cacheLocal;
+        // Exclui quaisquer dados de teste legados (Carlos Eduardo, Mariana, Roberto)
+        const validos = (cacheLocal || []).filter(m => 
+          !['Carlos Eduardo Silva', 'Mariana Santos Ribeiro', 'Roberto de Oliveira'].includes(m.name)
+        );
+        if (validos && validos.length > 0) {
+          listaMapeada = validos;
           setIsOfflineCached(true);
         } else {
-          // Fallback para demonstrar funcionamento com dados vinculados ao condomínio
-          const amostrasIniciais: MoradorBio[] = [
-            {
-              id: `res_${condoIdAlvo.slice(0, 6)}_1`,
-              condoId: condoIdAlvo,
-              name: 'Carlos Eduardo Silva',
-              unit: 'Bloco A - Apto 302',
-              type: 'Morador',
-              status: 'Ativo',
-              document: '123.456.789-00',
-              phone: '(11) 98765-4321',
-              faceEnrolled: true,
-              avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
-              createdAt: '2025-01-15'
-            },
-            {
-              id: `res_${condoIdAlvo.slice(0, 6)}_2`,
-              condoId: condoIdAlvo,
-              name: 'Mariana Santos Ribeiro',
-              unit: 'Bloco B - Apto 104',
-              type: 'Morador',
-              status: 'Ativo',
-              document: '987.654.321-11',
-              phone: '(11) 97654-3210',
-              faceEnrolled: true,
-              avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=250',
-              createdAt: '2025-02-01'
-            },
-            {
-              id: `res_${condoIdAlvo.slice(0, 6)}_3`,
-              condoId: condoIdAlvo,
-              name: 'Roberto de Oliveira',
-              unit: 'Bloco A - Apto 101',
-              type: 'Prestador',
-              status: 'Bloqueado',
-              document: '456.789.123-55',
-              phone: '(11) 91234-5678',
-              faceEnrolled: true,
-              avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=250',
-              createdAt: '2025-02-10'
-            }
-          ];
-          listaMapeada = amostrasIniciais;
-          try {
-            salvarCacheLocal('moradores_bio', listaMapeada, condoIdAlvo);
-            setIsOfflineCached(true);
-          } catch {}
+          // Zero testes artificiais! Apenas moradores reais deste condomínio
+          listaMapeada = [];
         }
       }
 
@@ -257,38 +216,72 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     recarregarMoradoresDoCondominio(activeCondoId);
   }, [activeCondoId, recarregarMoradoresDoCondominio]);
 
-  // --- LOGS DE AUDITORIA DE ACESSO ---
+  // --- LOGS DE AUDITORIA DE ACESSO (HISTÓRICO REAL DE PASSAGENS) ---
   const [accessLogs, setAccessLogs] = useState<AccessLogItem[]>(() => {
     try {
       const salvo = localStorage.getItem(`porttohub_biometria_logs_${activeCondoId}`);
-      if (salvo) return JSON.parse(salvo);
-    } catch {}
-    return [
-      {
-        id: `log_init_1`,
-        condoId: activeCondoId,
-        residentName: 'Carlos Eduardo Silva',
-        unit: 'Bloco A - Apto 302',
-        timestamp: new Date(Date.now() - 1000 * 60 * 5).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        dateStr: new Date().toLocaleDateString('pt-BR'),
-        status: 'Liberado',
-        method: 'Reconhecimento Facial (Totem)',
-        gate: 'Portão Pedestre Social'
-      },
-      {
-        id: `log_init_2`,
-        condoId: activeCondoId,
-        residentName: 'Roberto de Oliveira',
-        unit: 'Bloco A - Apto 101',
-        timestamp: new Date(Date.now() - 1000 * 60 * 25).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        dateStr: new Date().toLocaleDateString('pt-BR'),
-        status: 'Negado',
-        method: 'Reconhecimento Facial (Totem)',
-        reason: 'Cadastro Bloqueado por Decisão Administrativa',
-        gate: 'Portão Pedestre Social'
+      if (salvo) {
+        const parsed = JSON.parse(salvo);
+        if (Array.isArray(parsed)) {
+          // Remove rigorosamente logs legados de testes
+          return parsed.filter((l: AccessLogItem) => 
+            !['Carlos Eduardo Silva', 'Mariana Santos Ribeiro', 'Roberto de Oliveira', 'Teste', 'Simulação'].some(t => 
+              (l.residentName || '').toLowerCase().includes(t.toLowerCase())
+            )
+          );
+        }
       }
-    ];
+    } catch {}
+    return [];
   });
+
+  // Função para excluir faciais e históricos de teste anteriores
+  const limparTestesAnteriores = useCallback(() => {
+    const testNames = ['carlos eduardo silva', 'mariana santos ribeiro', 'roberto de oliveira', 'teste', 'simulação'];
+    
+    // Remove dos moradores locais
+    setResidents(prev => {
+      const limpos = prev.filter(m => !testNames.some(t => m.name.toLowerCase().includes(t)));
+      try {
+        salvarCacheLocal('moradores_bio', limpos, activeCondoId);
+      } catch {}
+      return limpos;
+    });
+
+    // Remove do histórico de acessos
+    setAccessLogs(prev => {
+      const limpos = prev.filter(l => !testNames.some(t => (l.residentName || '').toLowerCase().includes(t)));
+      try {
+        localStorage.setItem(`porttohub_biometria_logs_${activeCondoId}`, JSON.stringify(limpos));
+      } catch {}
+      return limpos;
+    });
+
+    // Varre e limpa chaves de cache com dados de teste
+    try {
+      Object.keys(localStorage).forEach(key => {
+        if (key.includes('moradores_bio') || key.includes('biometria_logs')) {
+          const raw = localStorage.getItem(key);
+          if (raw && (raw.toLowerCase().includes('carlos eduardo') || raw.toLowerCase().includes('mariana santos') || raw.toLowerCase().includes('roberto de oliveira'))) {
+            try {
+              const data = JSON.parse(raw);
+              if (Array.isArray(data)) {
+                const cleaned = data.filter((item: any) => 
+                  !testNames.some(t => ((item.name || item.residentName || '').toLowerCase().includes(t)))
+                );
+                localStorage.setItem(key, JSON.stringify(cleaned));
+              }
+            } catch {}
+          }
+        }
+      });
+    } catch {}
+  }, [activeCondoId]);
+
+  // Executa a exclusão de dados de teste na inicialização
+  useEffect(() => {
+    limparTestesAnteriores();
+  }, [limparTestesAnteriores]);
 
   useEffect(() => {
     try {
@@ -391,8 +384,9 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(true);
 
-  // Leitura 100% Automática Contínua (Hands-free)
-  const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(true);
+  // Leitura Facial - Controle de Pessoa em Frente ao Visor & Auto-Scan Opcional
+  const [selectedSubject, setSelectedSubject] = useState<MoradorBio | null>(null);
+  const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(false);
   const autoScanTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Recognition Simulation States
@@ -750,8 +744,10 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     };
   }, [isCameraActive, scanningStatus, activeTab]);
 
-  // --- RECONHECIMENTO BIOMÉTRICO (SIMULAÇÃO INTELIGENTE & AUTÔNOMA) ---
-  const processFacialRecognition = useCallback((forceStatus: 'success' | 'denied' | 'random' = 'random') => {
+  // --- RECONHECIMENTO BIOMÉTRICO (LEITURA EXATA DO ROSTO APRESENTADO) ---
+  const processFacialRecognition = useCallback((
+    target?: MoradorBio | 'unknown' | 'blocked' | 'success' | 'denied' | 'random'
+  ) => {
     if (scanningStatus === 'detecting' || scanningStatus === 'matched' || scanningStatus === 'denied') return;
     setScanningStatus('detecting');
 
@@ -766,17 +762,36 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
       const horaAtual = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const dataAtual = new Date().toLocaleDateString('pt-BR');
 
-      if (activeCondoResList.length === 0) {
+      // Se o condomínio não tem nenhum morador cadastrado ou alvo for desconhecido
+      if (target === 'unknown' || activeCondoResList.length === 0) {
         setScanningStatus('denied');
         playSoundAlert('denied');
         setLastMatchResult({
           status: 'Negado',
           name: 'Rosto Não Cadastrado',
           unit: 'Não Identificada',
-          reason: `Rosto não cadastrado no condomínio "${currentCondo.name}".`,
+          reason: activeCondoResList.length === 0 
+            ? `Nenhum morador cadastrado no condomínio "${currentCondo.name}". Cadastre moradores na aba "Cadastramento Facial".`
+            : `Rosto não cadastrado no condomínio "${currentCondo.name}".`,
           avatar: snapshotPip || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250',
+          capturedPip: snapshotPip,
           timestamp: horaAtual
         });
+
+        const newLog: AccessLogItem = {
+          id: `log_${Date.now()}`,
+          condoId: activeCondoId,
+          residentName: 'Rosto Não Cadastrado',
+          unit: 'Não Identificada',
+          timestamp: horaAtual,
+          dateStr: dataAtual,
+          status: 'Negado',
+          method: 'Reconhecimento Facial (Totem)',
+          reason: 'Rosto Não Cadastrado neste Condomínio',
+          gate: 'Portão Pedestre Social',
+          snapshotUrl: snapshotPip || undefined
+        };
+        setAccessLogs(prev => [newLog, ...prev]);
 
         setTimeout(() => {
           setScanningStatus('idle');
@@ -784,14 +799,29 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         return;
       }
 
-      const randomResident = activeCondoResList[Math.floor(Math.random() * activeCondoResList.length)];
-      const isApproved = forceStatus === 'success' ? true : forceStatus === 'denied' ? false : randomResident.status === 'Ativo';
+      // DETERMINAÇÃO RIGOROSA DO MORADOR LIDO: NUNCA MISTURA NOMES!
+      let residentToMatch: MoradorBio;
+      if (typeof target === 'object' && target !== null) {
+        residentToMatch = target;
+        setSelectedSubject(target);
+      } else if (target === 'blocked') {
+        const bloqueado = activeCondoResList.find(r => r.status === 'Bloqueado');
+        residentToMatch = bloqueado || activeCondoResList[0];
+        setSelectedSubject(residentToMatch);
+      } else if (selectedSubject && activeCondoResList.some(r => r.id === selectedSubject.id)) {
+        residentToMatch = selectedSubject;
+      } else {
+        residentToMatch = activeCondoResList[0];
+        setSelectedSubject(residentToMatch);
+      }
+
+      const isApproved = target === 'blocked' ? false : residentToMatch.status === 'Ativo';
 
       if (isApproved) {
         setScanningStatus('matched');
         playSoundAlert('success');
         setLastMatchResult({
-          ...randomResident,
+          ...residentToMatch,
           status: 'Liberado',
           timestamp: horaAtual,
           capturedPip: snapshotPip
@@ -800,18 +830,18 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         // Dispara acionamento do relé físico / webhook
         dispararPulsoRelayHardware('pedestrian');
 
-        // Registro de auditoria estrito ao condomínio ativo
+        // Registro de auditoria com o nome EXATO do morador lido
         const newLog: AccessLogItem = {
           id: `log_${Date.now()}`,
           condoId: activeCondoId,
-          residentName: randomResident.name,
-          unit: randomResident.unit,
+          residentName: residentToMatch.name,
+          unit: residentToMatch.unit,
           timestamp: horaAtual,
           dateStr: dataAtual,
           status: 'Liberado',
           method: 'Reconhecimento Facial (Totem)',
           gate: 'Portão Pedestre Social',
-          snapshotUrl: snapshotPip || undefined
+          snapshotUrl: snapshotPip || residentToMatch.avatar || undefined
         };
         setAccessLogs(prev => [newLog, ...prev]);
 
@@ -824,28 +854,28 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         playSoundAlert('denied');
         setLastMatchResult({
           status: 'Negado',
-          name: randomResident.name,
-          unit: randomResident.unit,
-          type: randomResident.type,
-          reason: randomResident.status === 'Bloqueado' ? 'Cadastro Bloqueado por Decisão Administrativa' : 'Acesso Não Autorizado para este Portão',
-          avatar: randomResident.avatar,
+          name: residentToMatch.name,
+          unit: residentToMatch.unit,
+          type: residentToMatch.type,
+          reason: residentToMatch.status === 'Bloqueado' ? 'Cadastro Bloqueado por Decisão Administrativa' : 'Acesso Não Autorizado para este Portão',
+          avatar: residentToMatch.avatar,
           capturedPip: snapshotPip,
           timestamp: horaAtual
         });
 
-        // Registro de recusa
+        // Registro de recusa com dados exatos
         const newLog: AccessLogItem = {
           id: `log_${Date.now()}`,
           condoId: activeCondoId,
-          residentName: randomResident.name,
-          unit: randomResident.unit,
+          residentName: residentToMatch.name,
+          unit: residentToMatch.unit,
           timestamp: horaAtual,
           dateStr: dataAtual,
           status: 'Negado',
           method: 'Reconhecimento Facial (Totem)',
-          reason: 'Cadastro Bloqueado ou Não Autorizado',
+          reason: residentToMatch.status === 'Bloqueado' ? 'Cadastro Bloqueado' : 'Acesso Não Autorizado',
           gate: 'Portão Pedestre Social',
-          snapshotUrl: snapshotPip || undefined
+          snapshotUrl: snapshotPip || residentToMatch.avatar || undefined
         };
         setAccessLogs(prev => [newLog, ...prev]);
 
@@ -854,26 +884,28 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         }, 4500);
       }
     }, 900);
-  }, [scanningStatus, captureCurrentFrameAsPiP, condoResidents, currentCondo.name, playSoundAlert, dispararPulsoRelayHardware, activeCondoId]);
+  }, [scanningStatus, captureCurrentFrameAsPiP, condoResidents, selectedSubject, currentCondo.name, playSoundAlert, dispararPulsoRelayHardware, activeCondoId]);
 
-  // --- LEITURA 100% AUTOMÁTICA EM CICLO CONTÍNUO (TÓTEM HANDS-FREE) ---
+  // --- LEITURA AUTOMÁTICA EM CICLO CONTÍNUO (QUANDO HABILITADO) ---
   useEffect(() => {
     if (!autoScanEnabled || activeTab !== 'totem' || !isCameraActive) {
       if (autoScanTimerRef.current) clearInterval(autoScanTimerRef.current);
       return;
     }
 
-    // A cada 7 segundos, se estiver em 'idle', dispara uma leitura automática
     autoScanTimerRef.current = setInterval(() => {
       if (scanningStatus === 'idle') {
-        processFacialRecognition('random');
+        if (condoResidents.length > 0) {
+          const alvo = selectedSubject || condoResidents[0];
+          processFacialRecognition(alvo);
+        }
       }
-    }, 7000);
+    }, 8000);
 
     return () => {
       if (autoScanTimerRef.current) clearInterval(autoScanTimerRef.current);
     };
-  }, [autoScanEnabled, activeTab, isCameraActive, scanningStatus, processFacialRecognition]);
+  }, [autoScanEnabled, activeTab, isCameraActive, scanningStatus, condoResidents, selectedSubject, processFacialRecognition]);
 
   // --- CAPTURA DE SNAPSHOT PARA CADASTRAMENTO PRESENCIAL ---
   const captureSnapshot = () => {
@@ -1315,6 +1347,83 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                       </div>
                     )}
 
+                    {/* DADOS DA FACIAL LIDA NA HORA (EXIBIÇÃO INTEGRADA NO VISOR) */}
+                    {lastMatchResult && (
+                      <div className={`absolute bottom-14 left-3 right-3 z-25 rounded-2xl p-2.5 sm:p-3.5 backdrop-blur-md border shadow-2xl transition-all duration-300 ${
+                        lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo'
+                          ? 'bg-slate-950/92 border-emerald-500/70 shadow-emerald-950/80'
+                          : 'bg-slate-950/92 border-red-500/70 shadow-red-950/80'
+                      }`}>
+                        <div className="flex items-center justify-between gap-2.5">
+                          {/* Avatares Lado a Lado (Foto do Cadastro & Foto Capturada no Tótem) */}
+                          <div className="flex items-center space-x-2.5 min-w-0">
+                            <div className="relative shrink-0">
+                              <img 
+                                src={lastMatchResult.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=250'} 
+                                alt={lastMatchResult.name} 
+                                className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl object-cover border-2 border-slate-700 shadow"
+                              />
+                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] bg-slate-900 border border-slate-700 px-1 rounded text-slate-300 font-bold uppercase">
+                                Cadastro
+                              </span>
+                            </div>
+
+                            {lastCapturedPiP && (
+                              <div className="relative shrink-0">
+                                <img 
+                                  src={lastCapturedPiP} 
+                                  alt="Captura ao Vivo" 
+                                  className="w-11 h-11 sm:w-13 sm:h-13 rounded-xl object-cover border-2 border-cyan-400 shadow"
+                                />
+                                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] bg-cyan-950 border border-cyan-500/70 px-1 rounded text-cyan-300 font-bold uppercase">
+                                  Tótem
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Informações da Facial Lida na Hora */}
+                            <div className="min-w-0">
+                              <div className="flex items-center space-x-1.5">
+                                <span className="text-[9px] uppercase font-bold tracking-wider text-cyan-400">
+                                  Facial Lida na Hora
+                                </span>
+                                <span className="text-[9px] text-slate-400 font-mono">
+                                  • {lastMatchResult.timestamp || 'Agora'}
+                                </span>
+                              </div>
+                              <h4 className="text-white font-bold text-sm sm:text-base truncate leading-tight">
+                                {lastMatchResult.name}
+                              </h4>
+                              <p className="text-xs text-slate-300 font-mono truncate">
+                                {lastMatchResult.unit} {lastMatchResult.type ? `• ${lastMatchResult.type}` : ''}
+                              </p>
+                              {lastMatchResult.reason && (
+                                <p className="text-[10px] text-red-300 truncate font-sans">
+                                  {lastMatchResult.reason}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Status de Liberação e Pulso Relé */}
+                          <div className="flex flex-col items-end shrink-0 space-y-1">
+                            <span className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold uppercase tracking-wider border ${
+                              lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo'
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/60'
+                                : 'bg-red-500/20 text-red-300 border-red-500/60'
+                            }`}>
+                              {lastMatchResult.status === 'Liberado' || lastMatchResult.status === 'Ativo' ? '✓ Liberado' : '✗ Negado'}
+                            </span>
+                            <span className="text-[9px] font-mono font-bold text-slate-400">
+                              {relayGateStatus.pedestrian 
+                                ? <span className="text-emerald-400 font-bold animate-pulse">PORTÃO ABERTO ({pulseCountdown}s)</span>
+                                : 'PORTÃO FECHADO'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Live Scanner Controls Overlay */}
                     <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between bg-slate-950/80 backdrop-blur px-3 sm:px-4 py-2 rounded-xl border border-slate-800/80 text-[11px] sm:text-xs">
                       <div className="flex items-center space-x-2">
@@ -1323,14 +1432,27 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                         <button 
                           onClick={() => setCameraZoom(prev => prev === 0.5 ? 1.0 : 0.5)}
                           className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 cursor-pointer"
-                          title="Alternar Zoom da Câmera"
+                          title="Alternar Zoom da Câmera (0.5x grande angular ou 1.0x)"
                         >
                           {cameraZoom}x
                         </button>
                       </div>
-                      <span className="font-mono text-slate-400 uppercase text-[10px] sm:text-[11px]">
-                        {autoScanEnabled ? 'Auto-Scan Ativo' : 'Manual'} • {currentCondo.code}
-                      </span>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => setAutoScanEnabled(prev => !prev)}
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded-lg border transition cursor-pointer ${
+                            autoScanEnabled 
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}
+                          title="Ligar/Desligar leitura automática contínua"
+                        >
+                          Auto-Scan: {autoScanEnabled ? 'ON' : 'OFF'}
+                        </button>
+                        <span className="font-mono text-slate-400 uppercase text-[10px] sm:text-[11px]">
+                          {currentCondo.code}
+                        </span>
+                      </div>
                     </div>
 
                     {/* GRANDE BANNER FLUTUANTE DE SUCESSO (VERDE NEON) */}
@@ -1381,35 +1503,58 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
                   </div>
 
-                  {/* SIMULATION TEST BUTTONS */}
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Controles do Tótem (Disparo Imediato de Teste com Moradores Reais)</span>
-                    <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                      <button 
-                        onClick={() => processFacialRecognition('success')}
-                        disabled={scanningStatus === 'detecting'}
-                        className="flex items-center justify-center space-x-2 bg-emerald-500/10 hover:bg-emerald-500/20 active:scale-98 border border-emerald-500/30 text-emerald-400 py-2.5 sm:py-3 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
-                      >
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span className="truncate">Simular Rosto Autorizado</span>
-                      </button>
-
-                      <button 
-                        onClick={() => processFacialRecognition('denied')}
-                        disabled={scanningStatus === 'detecting'}
-                        className="flex items-center justify-center space-x-2 bg-red-500/10 hover:bg-red-500/20 active:scale-98 border border-red-500/30 text-red-400 py-2.5 sm:py-3 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
-                      >
-                        <XCircle className="w-4 h-4 shrink-0" />
-                        <span className="truncate">Simular Rosto Bloqueado</span>
-                      </button>
+                  {/* CONTROLE DE LEITURA FACIAL (IDENTIFICAÇÃO EXATA DA PESSOA) */}
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Pessoa em Frente à Câmera (Leitura Imediata):</span>
+                      <span className="text-[10px] text-cyan-400 font-mono">{condoResidents.length} cadastrados</span>
                     </div>
+
+                    {condoResidents.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {condoResidents.map((r) => (
+                          <button
+                            key={r.id}
+                            onClick={() => processFacialRecognition(r)}
+                            disabled={scanningStatus === 'detecting'}
+                            className="flex items-center space-x-2 px-3 py-2 rounded-xl border border-slate-700 bg-slate-950 hover:bg-slate-900 active:scale-95 text-xs font-semibold text-slate-200 transition cursor-pointer hover:border-cyan-400 disabled:opacity-50"
+                            title={`Identificar ${r.name} na câmera`}
+                          >
+                            <img src={r.avatar} alt={r.name} className="w-5 h-5 rounded-full object-cover shrink-0" />
+                            <span className="truncate max-w-[130px] font-bold">{r.name}</span>
+                            <span className="text-[10px] text-cyan-400 font-mono">({r.unit.split('-')[1]?.trim() || r.unit})</span>
+                          </button>
+                        ))}
+
+                        <button
+                          onClick={() => processFacialRecognition('unknown')}
+                          disabled={scanningStatus === 'detecting'}
+                          className="flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 active:scale-95 text-red-400 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                          title="Simular pessoa desconhecida / não cadastrada"
+                        >
+                          <XCircle className="w-4 h-4 shrink-0" />
+                          <span>Não Cadastrado</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <span className="text-xs text-slate-400">Nenhum morador cadastrado ainda neste condomínio.</span>
+                        <button
+                          onClick={() => setIsEnrollModalOpen(true)}
+                          className="px-3.5 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center space-x-1.5 shrink-0"
+                        >
+                          <UserPlus className="w-4 h-4" />
+                          <span>Cadastrar Primeiro Morador</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* MATCH CARD & RELAY STATUS (5 COLS) */}
                 <div className="lg:col-span-5 flex flex-col space-y-4">
                   
-                  {/* Match Result Display */}
+                  {/* Match Result Display (DADOS DA FACIAL LIDA NA HORA) */}
                   <div className={`flex-1 rounded-3xl p-4 sm:p-6 border transition-all duration-300 flex flex-col justify-between ${
                     scanningStatus === 'matched' ? 'bg-emerald-950/30 border-emerald-500/50 shadow-2xl shadow-emerald-950' :
                     scanningStatus === 'denied' ? 'bg-red-950/30 border-red-500/50 shadow-2xl shadow-red-950' :
@@ -1425,7 +1570,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                         <p className="text-xs text-slate-400 max-w-xs">
                           {autoScanEnabled 
                             ? 'O leitor está operando em ciclo contínuo automático. Posicione o rosto para validação imediata.'
-                            : 'Aperte para simular ou ative o Auto-Scan para leitura mãos-livres.'}
+                            : 'Aperte no morador em frente à câmera para leitura imediata da facial.'}
                         </p>
                       </div>
                     )}
@@ -1433,8 +1578,8 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                     {scanningStatus === 'detecting' && (
                       <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
                         <RefreshCw className="w-10 h-10 text-cyan-400 animate-spin" />
-                        <h4 className="font-bold text-white text-md">Processando Biometria Facial...</h4>
-                        <p className="text-xs text-cyan-400 font-mono">Comparando descritor facial com a base de {currentCondo.name} ({currentCondo.code})</p>
+                        <h4 className="font-bold text-white text-md">Lendo Biometria Facial...</h4>
+                        <p className="text-xs text-cyan-400 font-mono">Processando dados da pessoa em frente à câmera em {currentCondo.name}</p>
                       </div>
                     )}
 
@@ -1515,6 +1660,113 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                   </div>
                 </div>
 
+              </div>
+
+              {/* HISTÓRICO EM LISTA DE TODAS AS PESSOAS QUE PASSARÃO PELO TÓTEM */}
+              <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-4 sm:p-6 space-y-4 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 bg-cyan-500/10 rounded-xl border border-cyan-500/20 text-cyan-400">
+                      <Clock className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-white text-sm sm:text-base">Histórico de Passagens no Tótem</h3>
+                      <p className="text-xs text-slate-400">Registro em tempo real de todas as pessoas validadas na portaria</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs bg-slate-950 border border-slate-800 px-3 py-1 rounded-xl font-mono text-cyan-400 font-bold">
+                      {condoLogs.length} {condoLogs.length === 1 ? 'passagem' : 'passagens'}
+                    </span>
+                    <button 
+                      onClick={limparTestesAnteriores}
+                      className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold rounded-xl flex items-center space-x-1 cursor-pointer transition"
+                      title="Excluir faciais testes anteriores e logs simulados"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Excluir Testes</span>
+                    </button>
+                    {condoLogs.length > 0 && (
+                      <button 
+                        onClick={() => {
+                          if (confirm('Deseja limpar o histórico recente de passagens deste tótem?')) {
+                            setAccessLogs(prev => prev.filter(l => l.condoId !== activeCondoId));
+                          }
+                        }}
+                        className="text-xs text-slate-500 hover:text-red-400 p-1.5 transition cursor-pointer"
+                        title="Limpar histórico deste condomínio"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Lista de Passagens */}
+                <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                  {condoLogs.map((log) => (
+                    <div 
+                      key={log.id} 
+                      className={`p-3 sm:p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition-all ${
+                        log.status === 'Liberado' 
+                          ? 'bg-slate-950/70 border-emerald-500/20 hover:border-emerald-500/40' 
+                          : 'bg-slate-950/70 border-red-500/20 hover:border-red-500/40'
+                      }`}
+                    >
+                      {/* Left: Thumbnail & Resident info */}
+                      <div className="flex items-center space-x-3 min-w-0">
+                        {log.snapshotUrl ? (
+                          <img 
+                            src={log.snapshotUrl} 
+                            alt={log.residentName} 
+                            className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-cover border border-slate-700 shrink-0" 
+                          />
+                        ) : (
+                          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shrink-0 font-bold text-sm">
+                            {log.residentName.charAt(0)}
+                          </div>
+                        )}
+
+                        <div className="min-w-0">
+                          <h4 className="font-bold text-white text-xs sm:text-sm truncate font-sans">
+                            {log.residentName}
+                          </h4>
+                          <p className="text-[11px] sm:text-xs text-cyan-400 font-medium truncate">
+                            {log.unit}
+                          </p>
+                          {log.reason && (
+                            <p className="text-[10px] text-red-400 truncate font-sans">
+                              {log.reason}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Status badge & timestamp */}
+                      <div className="text-right shrink-0 flex flex-col items-end space-y-1">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                          log.status === 'Liberado'
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                            : 'bg-red-500/10 text-red-400 border-red-500/30'
+                        }`}>
+                          {log.status === 'Liberado' ? '✓ Liberado' : '✗ Negado'}
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {log.timestamp}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {condoLogs.length === 0 && (
+                    <div className="p-8 text-center text-slate-500 space-y-2">
+                      <Clock className="w-8 h-8 mx-auto text-slate-600 animate-pulse" />
+                      <p className="text-xs">Nenhuma passagem registrada ainda neste condomínio.</p>
+                      <p className="text-[11px] text-slate-400">Conforme os moradores passarem pela câmera, o registro em tempo real aparecerá aqui.</p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
