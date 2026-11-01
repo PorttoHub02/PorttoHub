@@ -70,82 +70,73 @@ export interface HardwareRelayConfig {
 }
 
 export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: ControleAcessoProps) {
-  // --- IDENTIFICAÇÃO DO CONDOMÍNIO ATIVO LOGADO NO MOMENTO ---
-  const initialCondoId = useMemo(() => {
+  // --- IDENTIFICAÇÃO DO CONDOMÍNIO CONECTADO NO MOMENTO (SEM SELETOR MANUAL) ---
+  const activeCondoId = useMemo(() => {
     return getCondominioAtivoId(usuarioLogado, condominioAtivoProp) || 'condo_padrao';
   }, [usuarioLogado, condominioAtivoProp]);
 
-  const [activeCondoId, setActiveCondoId] = useState<string>(initialCondoId);
-  const [condominios, setCondominios] = useState<CondominioOption[]>([
-    {
-      id: initialCondoId,
-      name: usuarioLogado?.condominio_nome || 'Condomínio Ativo',
-      code: 'PORTTO-01',
-      totalUnits: 120
-    }
-  ]);
-  const [, setCarregandoCondos] = useState<boolean>(true);
+  // Informações do condomínio conectado no momento (lido diretamente do login ativo)
+  const [currentCondo, setCurrentCondo] = useState<{
+    id: string;
+    name: string;
+    code: string;
+    totalUnits: number;
+  }>({
+    id: activeCondoId,
+    name: usuarioLogado?.condominio_nome || 'Condomínio Conectado',
+    code: 'PORTTO-01',
+    totalUnits: 120
+  });
 
-  // Informações do condomínio atual selecionado
-  const currentCondo = useMemo(() => {
-    return condominios.find(c => c.id === activeCondoId) || condominios[0] || {
-      id: activeCondoId,
-      name: usuarioLogado?.condominio_nome || 'Condomínio Atual',
-      code: 'CONDO-ACT',
-      totalUnits: 100
-    };
-  }, [condominios, activeCondoId, usuarioLogado?.condominio_nome]);
-
-  // Se o usuário logado tiver seu próprio condomínio fixado, mantém sincronizado
-  useEffect(() => {
-    const cid = getCondominioAtivoId(usuarioLogado, condominioAtivoProp);
-    if (cid && cid !== 'global' && cid !== 'todos') {
-      setActiveCondoId(cid);
-    }
-  }, [usuarioLogado, condominioAtivoProp]);
-
-  // --- BUSCA CONDOS REAIS DO SUPABASE / CACHE ---
+  // Carrega os dados cadastrais do condomínio conectado no momento
   useEffect(() => {
     let ativo = true;
 
-    async function buscarCondominios() {
-      try {
-        setCarregandoCondos(true);
-        const { data, error } = await supabase
-          .from('condominios')
-          .select('id, nome, tipo_estrutura, unidades_por_bloco, qtd_blocos')
-          .order('nome');
+    async function buscarCondominioConectado() {
+      if (!activeCondoId) return;
 
-        if (!error && data && Array.isArray(data) && data.length > 0) {
-          if (!ativo) return;
-          const formatados: CondominioOption[] = data.map((c, i) => ({
-            id: String(c.id),
-            name: c.nome || `Condomínio ${i + 1}`,
-            code: (c.nome || 'COND').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() + `-${String(i + 1).padStart(2, '0')}`,
-            totalUnits: (Number(c.unidades_por_bloco) || 20) * (Number(c.qtd_blocos) || 1)
-          }));
-          setCondominios(formatados);
+      const nomeInicial = usuarioLogado?.condominio_nome;
 
-          const achou = formatados.some(c => c.id === activeCondoId);
-          if (!achou && formatados[0]) {
-            const desejado = getCondominioAtivoId(usuarioLogado, condominioAtivoProp);
-            if (desejado && formatados.some(c => c.id === desejado)) {
-              setActiveCondoId(desejado);
-            } else {
-              setActiveCondoId(formatados[0].id);
-            }
+      if (isUUID(activeCondoId)) {
+        try {
+          const { data, error } = await supabase
+            .from('condominios')
+            .select('id, nome, tipo_estrutura, unidades_por_bloco, qtd_blocos')
+            .eq('id', activeCondoId)
+            .maybeSingle();
+
+          if (!error && data && ativo) {
+            const nomeFinal = data.nome || nomeInicial || 'Condomínio Conectado';
+            const codigoFinal = nomeFinal.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() + '-01';
+            const total = (Number(data.unidades_por_bloco) || 20) * (Number(data.qtd_blocos) || 1);
+            setCurrentCondo({
+              id: activeCondoId,
+              name: nomeFinal,
+              code: codigoFinal,
+              totalUnits: total
+            });
+            return;
           }
+        } catch (err) {
+          console.warn('[ControleAcesso] Aviso ao buscar dados do condomínio conectado:', err);
         }
-      } catch (err) {
-        console.warn('[ControleAcesso] Aviso ao buscar condomínios:', err);
-      } finally {
-        if (ativo) setCarregandoCondos(false);
+      }
+
+      if (ativo) {
+        const nomeFinal = nomeInicial || 'Condomínio Conectado';
+        const codigoFinal = nomeFinal.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() + '-01';
+        setCurrentCondo({
+          id: activeCondoId,
+          name: nomeFinal,
+          code: codigoFinal,
+          totalUnits: 100
+        });
       }
     }
 
-    buscarCondominios();
+    buscarCondominioConectado();
     return () => { ativo = false; };
-  }, [usuarioLogado, condominioAtivoProp]);
+  }, [activeCondoId, usuarioLogado?.condominio_nome]);
 
   // --- DADOS DE MORADORES FILTRADOS STRICTLY PELO CONDOMÍNIO ATIVO ---
   const [residents, setResidents] = useState<MoradorBio[]>([]);
@@ -1028,25 +1019,25 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </div>
         </div>
 
-        {/* MULTI-TENANT CONDOMINIUM SELECTOR & TOOLS */}
+        {/* CONDOMÍNIO CONECTADO NO MOMENTO (SEM SELETOR MANUAL - LEITURA AUTOMÁTICA) */}
         <div className="flex items-center space-x-2 sm:space-x-3 w-full sm:w-auto justify-between sm:justify-end">
           
-          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-2xl px-3 py-1.5 flex-1 sm:w-80 shadow-inner">
-            <Building2 className="w-4 h-4 text-cyan-400 mr-2 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-wider truncate">Condomínio Ativo (Isolamento Total)</span>
-              <select 
-                value={activeCondoId}
-                onChange={(e) => setActiveCondoId(e.target.value)}
-                className="w-full bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer truncate"
-              >
-                {condominios.map(c => (
-                  <option key={c.id} value={c.id} className="bg-slate-900 text-white">
-                    {c.name} ({c.code})
-                  </option>
-                ))}
-              </select>
+          <div className="flex items-center bg-slate-950/80 border border-slate-800 rounded-2xl px-3 sm:px-3.5 py-1.5 flex-1 sm:w-auto sm:min-w-[240px] shadow-inner">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mr-2.5 shrink-0 text-cyan-400">
+              <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center space-x-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                <span className="text-[9px] uppercase font-bold text-emerald-400 tracking-wider truncate">Condomínio Conectado</span>
+              </div>
+              <h2 className="text-xs sm:text-sm font-bold text-white truncate leading-tight">
+                {currentCondo.name}
+              </h2>
+            </div>
+            <span className="ml-2 text-[10px] font-mono font-bold bg-slate-900 border border-slate-800 text-slate-400 px-2 py-0.5 rounded-lg shrink-0">
+              {currentCondo.code}
+            </span>
           </div>
 
           {/* Quick Self-Registration Link Button */}
