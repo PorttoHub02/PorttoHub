@@ -1,7 +1,7 @@
 {
   "name": "porttohub",
   "private": true,
-  "version": "0211260953",
+  "version": "0211260956",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -38,6 +38,6 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "wrangler": "^3.114.0"
+    "wrangler": "^4.0.0"
   }
 }
