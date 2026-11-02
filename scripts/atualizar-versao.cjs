@@ -132,4 +132,13 @@ try {
   }
 } catch (e) {}
 
+// 4. Prevenção do erro Cloudflare 100324: garante que nenhum _redirects exista
+try {
+  const pRedirects = path.resolve(__dirname, '../public/_redirects');
+  const dRedirects = path.resolve(__dirname, '../dist/_redirects');
+  if (fs.existsSync(pRedirects)) fs.unlinkSync(pRedirects);
+  if (fs.existsSync(dRedirects)) fs.unlinkSync(dRedirects);
+} catch (e) {}
+
 console.log(`[atualizar-versao] PorttoHub Build Version atualizada: ${versaoCalculada} (${commitHash})`);
+

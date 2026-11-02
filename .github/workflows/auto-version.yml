@@ -49,7 +49,8 @@ jobs:
           test -f dist/index.html || { echo "ERRO: dist/index.html não gerado!"; exit 1; }
           test -f dist/sw.js || { echo "ERRO: dist/sw.js ausente na pasta dist!"; exit 1; }
           test -f dist/_headers || cp public/_headers dist/_headers
-          test -f dist/_redirects || cp public/_redirects dist/_redirects
+          # Prevenção do erro Cloudflare 100324 (infinite loop): remover permanentemente qualquer _redirects
+          rm -f dist/_redirects public/_redirects
           echo "Conteúdo de version.json:"
           cat dist/version.json
 
