@@ -50,6 +50,7 @@ import {
   ShieldCheck,
   Sparkles,
   Home,
+  CreditCard,
   Settings
 } from 'lucide-react';
 import ModalConfigHorariosObrasMudancas from '../components/ModalConfigHorariosObrasMudancas';
@@ -57,6 +58,7 @@ import ModalConfigHorariosObrasMudancas from '../components/ModalConfigHorariosO
 
 export type PerfilAcesso = 'autorizado' | 'prestador_unidade' | 'prestador_condominio';
 export type TipoValidade = 'hoje' | 'amanha' | '3_dias' | '7_dias' | '30_dias' | 'personalizado' | 'permanente';
+export type CriterioBusca = 'CPF' | 'RG' | 'Placa' | 'Nome' | 'Unidade';
 
 export const OPCOES_PARENTESCO = [
   'Mãe',
@@ -145,11 +147,24 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
   const [filtroUnidade, setFiltroUnidade] = useState<string>('todas');
   const [mostrarFiltrosAvancados, setMostrarFiltrosAvancados] = useState(false);
 
+  // Estados do Menu Principal de Busca (5 Abas + Caixa de Busca + Dropdown Orientativo)
+  const [criterioBusca, setCriterioBusca] = useState<CriterioBusca>('Nome');
+  const [painelBuscaAberto, setPainelBuscaAberto] = useState(false);
+  const containerBuscaRef = React.useRef<HTMLDivElement>(null);
+  const inputBuscaGlobalRef = React.useRef<HTMLInputElement>(null);
+
+  const criteriosBusca: { id: CriterioBusca; rotulo: string; icone: React.ComponentType<{ className?: string }>; placeholderExemplo: string }[] = [
+    { id: 'CPF', rotulo: 'CPF', icone: CreditCard, placeholderExemplo: 'Ex: 000.000.000-00' },
+    { id: 'RG', rotulo: 'RG', icone: ShieldCheck, placeholderExemplo: 'Ex: 00.000.000-0' },
+    { id: 'Placa', rotulo: 'Placa', icone: Car, placeholderExemplo: 'Ex: ABC-1234 ou BRA2E19' },
+    { id: 'Nome', rotulo: 'Nome', icone: UserCheck, placeholderExemplo: 'Ex: Carlos Silva' },
+    { id: 'Unidade', rotulo: 'Unidade', icone: Home, placeholderExemplo: 'Ex: Casa 142 ou Apt 84' },
+  ];
+
   // Estados dos Fluxos de 1-Clique (Fast-Lane Portaria)
   const [tempoLimitePorPrestador, setTempoLimitePorPrestador] = useState<Record<string, number>>({});
   const [crachaPorPrestador, setCrachaPorPrestador] = useState<Record<string, string>>({});
   const [whatsappAutomatico, setWhatsappAutomatico] = useState<boolean>(true);
-  const inputBuscaGlobalRef = React.useRef<HTMLInputElement>(null);
 
   // Tempo e Alerta Sonoro
   const [tempoAtual, setTempoAtual] = useState(Date.now());
@@ -297,18 +312,32 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
     } catch {}
   };
 
-  // Atalho de teclado global: tecla '/' ou Ctrl+K foca instantaneamente na barra de busca
+  // Fecha o dropdown suspenso de busca ao clicar fora
+  useEffect(() => {
+    function handleClickFora(e: MouseEvent) {
+      if (containerBuscaRef.current && !containerBuscaRef.current.contains(e.target as Node)) {
+        setPainelBuscaAberto(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickFora);
+    return () => document.removeEventListener('mousedown', handleClickFora);
+  }, []);
+
+  // Atalho de teclado global: tecla '/' ou Ctrl+K foca instantaneamente na barra de busca e abre o painel
   useEffect(() => {
     const handleKeyShortcut = (e: KeyboardEvent) => {
       if ((e.key === '/' || (e.ctrlKey && e.key === 'k')) && document.activeElement !== inputBuscaGlobalRef.current) {
         e.preventDefault();
         inputBuscaGlobalRef.current?.focus();
         inputBuscaGlobalRef.current?.select();
+        setPainelBuscaAberto(true);
+      } else if (e.key === 'Escape' && painelBuscaAberto) {
+        setPainelBuscaAberto(false);
       }
     };
     window.addEventListener('keydown', handleKeyShortcut);
     return () => window.removeEventListener('keydown', handleKeyShortcut);
-  }, []);
+  }, [painelBuscaAberto]);
 
   // Carrega dados iniciais
   useEffect(() => {
@@ -542,6 +571,30 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       setUnidade('');
       setBloco('');
     }
+    setModalNovoCadastro(true);
+    setFabLiberacaoAberto(false);
+  };
+
+  // Abertura com dados pré-preenchidos do Menu de Busca (5 Abas)
+  const abrirNovoAcessoComDados = (criterio?: CriterioBusca, valor?: string) => {
+    fecharModalCadastro();
+    if (criterio && valor && valor.trim()) {
+      const valLimpo = valor.trim();
+      if (criterio === 'CPF') {
+        setDocumento(valLimpo);
+        setTipoDocumento('CPF');
+      } else if (criterio === 'RG') {
+        setDocumento(valLimpo);
+        setTipoDocumento('RG');
+      } else if (criterio === 'Placa') {
+        setPlacaVeiculo(valLimpo.toUpperCase());
+      } else if (criterio === 'Nome') {
+        setNomeCompleto(valLimpo);
+      } else if (criterio === 'Unidade') {
+        setUnidade(valLimpo);
+      }
+    }
+    setPainelBuscaAberto(false);
     setModalNovoCadastro(true);
     setFabLiberacaoAberto(false);
   };
@@ -1449,7 +1502,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
         if ((c.unidade || '').toString().trim() !== filtroUnidade) return false;
       }
 
-      // 4. Busca Preditiva Universal em tempo real (Nome, Documento, Empresa, Unidade, Bloco, Placa)
+      // 4. Busca Preditiva Inteligente conectada às 5 abas de critérios com fallback universal
       if (buscaNorm) {
         const nome = (c.nome_profissional || c.nome_completo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const doc = (c.documento || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -1459,7 +1512,18 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
         const pla = (c.placa_veiculo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         const vin = (c.parentesco_vinculo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        const bate =
+        let bateCriterio = false;
+        if (criterioBusca === 'CPF' || criterioBusca === 'RG') {
+          bateCriterio = doc.includes(buscaNorm);
+        } else if (criterioBusca === 'Placa') {
+          bateCriterio = pla.includes(buscaNorm);
+        } else if (criterioBusca === 'Nome') {
+          bateCriterio = nome.includes(buscaNorm) || emp.includes(buscaNorm);
+        } else if (criterioBusca === 'Unidade') {
+          bateCriterio = uni.includes(buscaNorm) || blo.includes(buscaNorm);
+        }
+
+        const bateUniversal =
           nome.includes(buscaNorm) ||
           doc.includes(buscaNorm) ||
           emp.includes(buscaNorm) ||
@@ -1468,7 +1532,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
           pla.includes(buscaNorm) ||
           vin.includes(buscaNorm);
 
-        if (!bate) return false;
+        if (!bateCriterio && !bateUniversal) return false;
       }
 
       return true;
@@ -1494,7 +1558,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       const dataB = b.created_at ? new Date(b.created_at).getTime() : 0;
       return dataB - dataA;
     });
-  }, [cadastros, filtroCategoria, filtroStatus, busca, filtroUnidade, prestadoresAtivos]);
+  }, [cadastros, filtroCategoria, filtroStatus, busca, filtroUnidade, prestadoresAtivos, criterioBusca]);
 
 
   // Lista única de unidades para o filtro
@@ -1614,78 +1678,309 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       {/* 2. PAINEL DE CONTROLE DE TELA ÚNICA (SINGLE-PANE-OF-GLASS) */}
       {/* ========================================================================= */}
 
-      {/* 2.1 BARRA DE BUSCA GLOBAL UNIVERSAL E PREDITIVA (PONTO FOCAL ABSOLUTO) */}
-      <div className="bg-slate-900 p-3 sm:p-4 rounded-2xl border border-slate-800 space-y-3 shadow-md">
-        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
-          {/* Input de Busca Universal em Tempo Real */}
-          <div className="relative flex-1">
-            <Search className="w-5 h-5 absolute left-3.5 top-3.5 text-purple-400 pointer-events-none" />
-            <input
-              ref={inputBuscaGlobalRef}
-              type="text"
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
-              placeholder="Busca rápida: Nome, CPF/RG, Unidade (Casa 142), Placa (ABC-1234) ou Empresa..."
-              className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-24 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
-              autoFocus
-            />
-            <div className="absolute right-3 top-3 flex items-center gap-1.5">
-              {busca ? (
+      {/* ========================================================================= */}
+      {/* 2. PAINEL DE CONTROLE DE TELA ÚNICA: MOTOR DE BUSCA EM 5 ABAS & ACESSO RÁPIDO */}
+      {/* ========================================================================= */}
+      <div ref={containerBuscaRef} className="relative z-30 bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-800 space-y-3.5 shadow-xl">
+        
+        {/* 2.1 ABAS DE FILTRO DE PESQUISA (5 CRITÉRIOS HORIZONTAIS: CPF, RG, Placa, Nome, Unidade) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 scrollbar-none">
+          {criteriosBusca.map((crit) => {
+            const IconeCrit = crit.icone;
+            const ativo = criterioBusca === crit.id;
+            return (
+              <button
+                key={crit.id}
+                type="button"
+                onClick={() => {
+                  setCriterioBusca(crit.id);
+                  inputBuscaGlobalRef.current?.focus();
+                  setPainelBuscaAberto(true);
+                }}
+                className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all shrink-0 cursor-pointer ${
+                  ativo
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 ring-2 ring-purple-400/50 scale-[1.02]'
+                    : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800/80 border border-slate-800/80'
+                }`}
+              >
+                <IconeCrit className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${ativo ? 'text-white' : 'text-slate-400'}`} />
+                <span>{crit.rotulo}</span>
+              </button>
+            );
+          })}
+
+          <div className="ml-auto hidden md:flex items-center text-[11px] text-slate-400 font-medium">
+            <span className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950 border border-slate-800">
+              <Sparkles className="w-3 h-3 text-purple-400" />
+              Critério: <strong className="text-white">{criterioBusca}</strong>
+            </span>
+          </div>
+        </div>
+
+        {/* 2.2 CAMPO DE BUSCA COM ÍCONE DE LUPA E PLACEHOLDER INSTRUCIONAL */}
+        <div className="relative">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
+            <div className="relative flex-1">
+              <Search className="w-5 h-5 absolute left-3.5 top-3.5 text-purple-400 pointer-events-none" />
+              <input
+                ref={inputBuscaGlobalRef}
+                type="text"
+                value={busca}
+                onChange={(e) => {
+                  setBusca(e.target.value);
+                  if (!painelBuscaAberto) setPainelBuscaAberto(true);
+                }}
+                onFocus={() => setPainelBuscaAberto(true)}
+                placeholder="Digite para buscar um cadastro"
+                className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-24 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
+                autoFocus
+              />
+              <div className="absolute right-3 top-3 flex items-center gap-1.5">
+                {busca ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBusca('');
+                      inputBuscaGlobalRef.current?.focus();
+                    }}
+                    className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                    title="Limpar busca"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <kbd className="hidden sm:inline-block px-2 py-0.5 text-[11px] font-mono text-slate-400 bg-slate-800 border border-slate-700 rounded shadow-xs">
+                    /
+                  </kbd>
+                )}
+              </div>
+            </div>
+
+            {/* Toggle de WhatsApp Automático e Botão de Ação Direta */}
+            <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0">
+              <label
+                htmlFor="toggle-whatsapp-auto"
+                className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer select-none hover:border-slate-700 transition"
+                title="Disparar WhatsApp formatado automaticamente ao liberar entrada"
+              >
+                <input
+                  id="toggle-whatsapp-auto"
+                  type="checkbox"
+                  checked={whatsappAutomatico}
+                  onChange={(e) => setWhatsappAutomatico(e.target.checked)}
+                  className="w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-900 border-slate-700"
+                />
+                <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">WhatsApp Automático</span>
+                  <span className="sm:hidden">WhatsApp</span>
+                </span>
+              </label>
+
+              {permissoesOperador.cadastrar && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setBusca('');
-                    inputBuscaGlobalRef.current?.focus();
-                  }}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition"
-                  title="Limpar busca"
+                  onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer min-h-[44px]"
                 >
-                  <X className="w-4 h-4" />
+                  <Plus className="w-4 h-4" />
+                  <span>+ Novo acesso</span>
                 </button>
-              ) : (
-                <kbd className="hidden sm:inline-block px-2 py-0.5 text-[11px] font-mono text-slate-400 bg-slate-800 border border-slate-700 rounded shadow-xs">
-                  /
-                </kbd>
               )}
             </div>
           </div>
 
-          {/* Toggle de WhatsApp Automático e Ação Nova Liberação */}
-          <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0">
-            <label
-              htmlFor="toggle-whatsapp-auto"
-              className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer select-none hover:border-slate-700 transition"
-              title="Disparar link formatado do WhatsApp automaticamente ao registrar entrada"
-            >
-              <input
-                id="toggle-whatsapp-auto"
-                type="checkbox"
-                checked={whatsappAutomatico}
-                onChange={(e) => setWhatsappAutomatico(e.target.checked)}
-                className="w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-900 border-slate-700"
-              />
-              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">WhatsApp Automático</span>
-                <span className="sm:hidden">WhatsApp</span>
-              </span>
-            </label>
+          {/* 2.3 PAINEL DE ORIENTAÇÃO E AÇÃO (DROPDOWN SUSPENSO AO FOCAR OU DIGITAR) */}
+          {painelBuscaAberto && (
+            <div className="absolute left-0 right-0 top-full mt-2 bg-slate-900 border-2 border-slate-700/90 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-150 backdrop-blur-md">
+              {/* Mensagem Orientativa para o Operador & Botão + Novo Acesso */}
+              <div className="p-3 sm:p-4 bg-slate-950/90 border-b border-slate-800/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 rounded-xl bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0">
+                    <Info className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-xs sm:text-sm font-black text-slate-100">
+                      Digite para buscar antes de registrar um novo acesso
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Critério ativo: <span className="text-purple-400 font-bold">{criterioBusca}</span>
+                      {busca ? ` • Filtrando por: "${busca}"` : ' • Busca preditiva instantânea'}
+                    </p>
+                  </div>
+                </div>
 
-            {permissoesOperador.cadastrar && (
-              <button
-                type="button"
-                onClick={() => {
-                  fecharModalCadastro();
-                  setModalNovoCadastro(true);
-                }}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer min-h-[44px]"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden sm:inline">Nova Liberação</span>
-                <span className="sm:hidden">Novo</span>
-              </button>
-            )}
-          </div>
+                {permissoesOperador.cadastrar && (
+                  <button
+                    type="button"
+                    onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
+                    className="bg-purple-600 hover:bg-purple-500 text-white font-black px-4 py-2 rounded-xl text-xs uppercase flex items-center justify-center gap-2 transition shadow-md shadow-purple-600/30 active:scale-95 cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ Novo acesso</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Lista Preditiva em Tempo Real dentro do Dropdown */}
+              <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60 p-1 sm:p-2">
+                {cadastrosFiltrados.slice(0, 6).map((cad: any) => {
+                  const ehVisitante = cad.perfil_acesso === 'autorizado';
+                  const prestadorNoLocal = prestadoresAtivos.find((a: any) => (a.prestador_id || a.id) === cad.id);
+                  const estaDentro = Boolean(prestadorNoLocal);
+                  const perm = estaDentro ? checarPermanencia(prestadorNoLocal) : null;
+
+                  return (
+                    <div
+                      key={cad.id}
+                      className="p-2.5 sm:p-3 hover:bg-slate-800/70 rounded-xl transition flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="relative shrink-0">
+                          {cad.foto_rosto ? (
+                            <img
+                              src={cad.foto_rosto}
+                              alt={cad.nome_completo}
+                              className="w-10 h-10 rounded-xl object-cover border border-slate-700"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center border border-slate-700 text-slate-300 font-bold text-xs">
+                              {(cad.nome_profissional || cad.nome_completo || 'P').slice(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          {estaDentro && (
+                            <span className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full bg-blue-500 border-2 border-slate-900 animate-pulse" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                              {cad.nome_profissional || cad.nome_completo}
+                            </h4>
+                            <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                              ehVisitante
+                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                            }`}>
+                              {ehVisitante ? 'Visitante' : 'Prestador'}
+                            </span>
+                            {estaDentro && (
+                              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${perm?.estourado ? 'bg-red-600 text-white animate-pulse' : 'bg-blue-600 text-white'}`}>
+                                {perm?.estourado ? 'ESTOURADO' : 'DENTRO'}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap mt-0.5 font-medium">
+                            <span className="text-purple-300 font-bold">
+                              {eEstruturaCasas ? 'Casa' : 'Unid'}: {cad.unidade || 'Geral'} {cad.bloco && `(${cad.bloco})`}
+                            </span>
+                            {cad.documento && (
+                              <span>Doc: <strong className="text-slate-300 font-mono">{cad.documento}</strong></span>
+                            )}
+                            {cad.placa_veiculo && (
+                              <span>Placa: <strong className="text-slate-300 font-mono uppercase">{cad.placa_veiculo}</strong></span>
+                            )}
+                            {cad.empresa && (
+                              <span>Emp: {cad.empresa}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Ações de 1 Clique no próprio Dropdown */}
+                      <div className="flex items-center gap-1.5 shrink-0 justify-end">
+                        {ehVisitante ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              darEntradaRapidaVisitante(cad);
+                              setPainelBuscaAberto(false);
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                          >
+                            <LogIn className="w-3.5 h-3.5" />
+                            <span>Entrada 1-Clique</span>
+                          </button>
+                        ) : estaDentro ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              darSaidaRapidaPrestador(prestadorNoLocal);
+                              setPainelBuscaAberto(false);
+                            }}
+                            className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            <span>Saída Imediata</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              darEntradaRapidaPrestador(cad);
+                              setPainelBuscaAberto(false);
+                            }}
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                          >
+                            <LogIn className="w-3.5 h-3.5" />
+                            <span>Entrada Rápida</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setItemSelecionado(cad);
+                            setPainelBuscaAberto(false);
+                            setAbaAtiva('cadastros');
+                          }}
+                          className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer"
+                          title="Focar na lista"
+                        >
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {cadastrosFiltrados.length === 0 && (
+                  <div className="py-6 px-4 text-center space-y-3">
+                    <p className="text-xs sm:text-sm text-slate-400 font-semibold">
+                      Nenhum cadastro encontrado para o critério <strong className="text-purple-400">{criterioBusca}</strong> {busca && `com termo "${busca}"`}.
+                    </p>
+                    {permissoesOperador.cadastrar && (
+                      <button
+                        type="button"
+                        onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase transition shadow-md shadow-emerald-600/30 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Cadastrar Novo Acesso agora com "{busca || criterioBusca}"</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Rodapé do Dropdown com atalhos */}
+              <div className="p-2 sm:p-2.5 bg-slate-950 border-t border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+                <span>Pressione <kbd className="px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700 text-slate-300 font-mono">ESC</kbd> para fechar</span>
+                <button
+                  type="button"
+                  onClick={() => setPainelBuscaAberto(false)}
+                  className="text-purple-400 hover:text-purple-300 font-bold cursor-pointer"
+                >
+                  Fechar Painel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 2.2 ATALHOS RÁPIDOS DE STATUS E FILTROS DINÂMICOS */}
