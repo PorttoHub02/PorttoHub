@@ -1683,41 +1683,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       {/* ========================================================================= */}
       <div ref={containerBuscaRef} className="relative z-30 bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-800 space-y-3.5 shadow-xl">
         
-        {/* 2.1 ABAS DE FILTRO DE PESQUISA (5 CRITÉRIOS HORIZONTAIS: CPF, RG, Placa, Nome, Unidade) */}
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 scrollbar-none">
-          {criteriosBusca.map((crit) => {
-            const IconeCrit = crit.icone;
-            const ativo = criterioBusca === crit.id;
-            return (
-              <button
-                key={crit.id}
-                type="button"
-                onClick={() => {
-                  setCriterioBusca(crit.id);
-                  inputBuscaGlobalRef.current?.focus();
-                  setPainelBuscaAberto(true);
-                }}
-                className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all shrink-0 cursor-pointer ${
-                  ativo
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 ring-2 ring-purple-400/50 scale-[1.02]'
-                    : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800/80 border border-slate-800/80'
-                }`}
-              >
-                <IconeCrit className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${ativo ? 'text-white' : 'text-slate-400'}`} />
-                <span>{crit.rotulo}</span>
-              </button>
-            );
-          })}
-
-          <div className="ml-auto hidden md:flex items-center text-[11px] text-slate-400 font-medium">
-            <span className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950 border border-slate-800">
-              <Sparkles className="w-3 h-3 text-purple-400" />
-              Critério: <strong className="text-white">{criterioBusca}</strong>
-            </span>
-          </div>
-        </div>
-
-        {/* 2.2 CAMPO DE BUSCA COM ÍCONE DE LUPA E PLACEHOLDER INSTRUCIONAL */}
+        {/* 2. CAMPO DE BUSCA COM ÍCONE DE LUPA E BUSCA UNIVERSAL PREDITIVA */}
         <div className="relative">
           <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
             <div className="relative flex-1">
@@ -1731,7 +1697,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                   if (!painelBuscaAberto) setPainelBuscaAberto(true);
                 }}
                 onFocus={() => setPainelBuscaAberto(true)}
-                placeholder="Digite para buscar um cadastro"
+                placeholder="Digite nome, CPF, RG, placa ou unidade para buscar..."
                 className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-24 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
                 autoFocus
               />
@@ -1780,7 +1746,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
               {permissoesOperador.cadastrar && (
                 <button
                   type="button"
-                  onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
+                  onClick={() => abrirNovoAcessoComDados('Nome', busca)}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer min-h-[44px]"
                 >
                   <Plus className="w-4 h-4" />
@@ -1801,11 +1767,10 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                   </span>
                   <div>
                     <p className="text-xs sm:text-sm font-black text-slate-100">
-                      Digite para buscar antes de registrar um novo acesso
+                      Busca preditiva inteligente de pessoas e autorizados
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      Critério ativo: <span className="text-purple-400 font-bold">{criterioBusca}</span>
-                      {busca ? ` • Filtrando por: "${busca}"` : ' • Busca preditiva instantânea'}
+                      {busca ? `Filtrando por: "${busca}"` : 'Digite nome, documento, placa ou unidade para filtrar em tempo real'}
                     </p>
                   </div>
                 </div>
@@ -1813,7 +1778,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                 {permissoesOperador.cadastrar && (
                   <button
                     type="button"
-                    onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
+                    onClick={() => abrirNovoAcessoComDados('Nome', busca)}
                     className="bg-purple-600 hover:bg-purple-500 text-white font-black px-4 py-2 rounded-xl text-xs uppercase flex items-center justify-center gap-2 transition shadow-md shadow-purple-600/30 active:scale-95 cursor-pointer shrink-0"
                   >
                     <Plus className="w-4 h-4" />
@@ -1983,166 +1948,20 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
           )}
         </div>
 
-        {/* 2.2 ATALHOS RÁPIDOS DE STATUS E FILTROS DINÂMICOS */}
-        <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold">
-            {/* Todos */}
+        {/* Contador de Registros e Limpar Busca */}
+        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span>
+            <strong className="text-white">{cadastrosFiltrados.length}</strong> pessoa(s) listada(s)
+          </span>
+          {busca.trim() && (
             <button
               type="button"
-              onClick={() => {
-                setAbaAtiva('cadastros');
-                setFiltroCategoria('todos');
-                setFiltroStatus('todos');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                abaAtiva === 'cadastros' && filtroCategoria === 'todos' && filtroStatus === 'todos'
-                  ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
+              onClick={() => setBusca('')}
+              className="text-[11px] text-red-400 hover:text-red-300 font-bold ml-1 cursor-pointer flex items-center gap-0.5"
             >
-              <Users className="w-3.5 h-3.5 text-purple-400" />
-              <span>Todos</span>
-              <span className="font-mono text-[11px] opacity-75">({cadastros.length})</span>
+              <X className="w-3 h-3" /> Limpar busca
             </button>
-
-            {/* Estourados com Alarme Visual Destacado */}
-            <button
-              type="button"
-              onClick={() => {
-                setAbaAtiva('permanencia');
-                setFiltroStatus('dentro');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                estatisticas.estourados > 0
-                  ? 'bg-red-600 text-white border-red-500 animate-pulse font-black shadow-md shadow-red-600/30'
-                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              <ShieldAlert className="w-3.5 h-3.5" />
-              <span>Estourados</span>
-              <span className="font-mono text-[11px] px-1.5 rounded-full bg-red-950 text-white">
-                {estatisticas.estourados}
-              </span>
-            </button>
-
-            {/* Dentro Agora (Prestadores com Permanência) */}
-            <button
-              type="button"
-              onClick={() => {
-                setAbaAtiva('cadastros');
-                setFiltroStatus('dentro');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                filtroStatus === 'dentro'
-                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                  : 'bg-blue-950/30 text-blue-300 border-blue-900/60 hover:bg-blue-950/50'
-              }`}
-            >
-              <Timer className="w-3.5 h-3.5 text-blue-400" />
-              <span>Dentro Agora</span>
-              <span className="font-mono text-[11px] px-1.5 rounded-full bg-blue-900 text-blue-200">
-                {estatisticas.prestadoresDentro}
-              </span>
-            </button>
-
-            {/* Visitantes & Família */}
-            <button
-              type="button"
-              onClick={() => {
-                setAbaAtiva('cadastros');
-                setFiltroCategoria('autorizado');
-                setFiltroStatus('todos');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                filtroCategoria === 'autorizado' && filtroStatus !== 'dentro'
-                  ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              <span>Visitantes / Família</span>
-              <span className="font-mono text-[11px] opacity-75">
-                ({cadastros.filter(c => c.perfil_acesso === 'autorizado').length})
-              </span>
-            </button>
-
-            {/* Prestadores da Unidade */}
-            <button
-              type="button"
-              onClick={() => {
-                setAbaAtiva('cadastros');
-                setFiltroCategoria('prestador_unidade');
-                setFiltroStatus('todos');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                filtroCategoria === 'prestador_unidade' && filtroStatus !== 'dentro'
-                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              <HardHat className="w-3.5 h-3.5 text-blue-400" />
-              <span>Prestador Unidade</span>
-              <span className="font-mono text-[11px] opacity-75">
-                ({cadastros.filter(c => c.perfil_acesso === 'prestador_unidade').length})
-              </span>
-            </button>
-
-            {/* Prestadores do Condomínio / Obras */}
-            <button
-              type="button"
-              onClick={() => {
-                setAbaAtiva('cadastros');
-                setFiltroCategoria('prestador_condominio');
-                setFiltroStatus('todos');
-              }}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                filtroCategoria === 'prestador_condominio' && filtroStatus !== 'dentro'
-                  ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              <Building2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Condomínio / Obras</span>
-              <span className="font-mono text-[11px] opacity-75">
-                ({cadastros.filter(c => c.perfil_acesso === 'prestador_condominio').length})
-              </span>
-            </button>
-
-            {/* Histórico de Acessos */}
-            <button
-              type="button"
-              onClick={() => setAbaAtiva(abaAtiva === 'historico' ? 'cadastros' : 'historico')}
-              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
-                abaAtiva === 'historico'
-                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Histórico</span>
-              <span className="font-mono text-[11px] opacity-75">({historicoAcessos.length})</span>
-            </button>
-          </div>
-
-          {/* Contador de Filtrados e Botão Limpar */}
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span>
-              <strong className="text-white">{cadastrosFiltrados.length}</strong> pessoa(s) listada(s)
-            </span>
-            {(busca.trim() || filtroCategoria !== 'todos' || filtroStatus !== 'todos') && (
-              <button
-                type="button"
-                onClick={() => {
-                  setBusca('');
-                  setFiltroCategoria('todos');
-                  setFiltroStatus('todos');
-                  setAbaAtiva('cadastros');
-                }}
-                className="text-[11px] text-red-400 hover:text-red-300 font-bold ml-1 cursor-pointer flex items-center gap-0.5"
-              >
-                <X className="w-3 h-3" /> Limpar
-              </button>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
