@@ -51,14 +51,15 @@ import {
   Sparkles,
   Home,
   CreditCard,
-  Settings
+  Settings,
+  History
 } from 'lucide-react';
 import ModalConfigHorariosObrasMudancas from '../components/ModalConfigHorariosObrasMudancas';
 
 
 export type PerfilAcesso = 'autorizado' | 'prestador_unidade' | 'prestador_condominio';
 export type TipoValidade = 'hoje' | 'amanha' | '3_dias' | '7_dias' | '30_dias' | 'personalizado' | 'permanente';
-export type CriterioBusca = 'CPF' | 'RG' | 'Placa' | 'Nome' | 'Unidade';
+export type CriterioBusca = 'CPF' | 'Nome' | 'Unidade' | 'Placa';
 
 export const OPCOES_PARENTESCO = [
   'Mãe',
@@ -147,18 +148,17 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
   const [filtroUnidade, setFiltroUnidade] = useState<string>('todas');
   const [mostrarFiltrosAvancados, setMostrarFiltrosAvancados] = useState(false);
 
-  // Estados do Menu Principal de Busca (5 Abas + Caixa de Busca + Dropdown Orientativo)
+  // Estados do Menu Principal de Busca (Seleção por CPF, Nome, Unidade e Placa)
   const [criterioBusca, setCriterioBusca] = useState<CriterioBusca>('Nome');
   const [painelBuscaAberto, setPainelBuscaAberto] = useState(false);
   const containerBuscaRef = React.useRef<HTMLDivElement>(null);
   const inputBuscaGlobalRef = React.useRef<HTMLInputElement>(null);
 
   const criteriosBusca: { id: CriterioBusca; rotulo: string; icone: React.ComponentType<{ className?: string }>; placeholderExemplo: string }[] = [
-    { id: 'CPF', rotulo: 'CPF', icone: CreditCard, placeholderExemplo: 'Ex: 000.000.000-00' },
-    { id: 'RG', rotulo: 'RG', icone: ShieldCheck, placeholderExemplo: 'Ex: 00.000.000-0' },
-    { id: 'Placa', rotulo: 'Placa', icone: Car, placeholderExemplo: 'Ex: ABC-1234 ou BRA2E19' },
-    { id: 'Nome', rotulo: 'Nome', icone: UserCheck, placeholderExemplo: 'Ex: Carlos Silva' },
-    { id: 'Unidade', rotulo: 'Unidade', icone: Home, placeholderExemplo: 'Ex: Casa 142 ou Apt 84' },
+    { id: 'CPF', rotulo: 'CPF', icone: CreditCard, placeholderExemplo: 'Digite o CPF (ex: 000.000.000-00 ou números)...' },
+    { id: 'Nome', rotulo: 'Nome', icone: UserCheck, placeholderExemplo: 'Digite o nome do autorizado ou prestador...' },
+    { id: 'Unidade', rotulo: 'Unidade', icone: Home, placeholderExemplo: 'Digite a unidade ou casa (ex: 142, Bloco A)...' },
+    { id: 'Placa', rotulo: 'Placa', icone: Car, placeholderExemplo: 'Digite a placa do veículo (ex: ABC-1234 ou BRA2E19)...' },
   ];
 
   // Estados dos Fluxos de 1-Clique (Fast-Lane Portaria)
@@ -583,9 +583,6 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       if (criterio === 'CPF') {
         setDocumento(valLimpo);
         setTipoDocumento('CPF');
-      } else if (criterio === 'RG') {
-        setDocumento(valLimpo);
-        setTipoDocumento('RG');
       } else if (criterio === 'Placa') {
         setPlacaVeiculo(valLimpo.toUpperCase());
       } else if (criterio === 'Nome') {
@@ -1513,26 +1510,17 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
         const vin = (c.parentesco_vinculo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
         let bateCriterio = false;
-        if (criterioBusca === 'CPF' || criterioBusca === 'RG') {
+        if (criterioBusca === 'CPF') {
           bateCriterio = doc.includes(buscaNorm);
-        } else if (criterioBusca === 'Placa') {
-          bateCriterio = pla.includes(buscaNorm);
         } else if (criterioBusca === 'Nome') {
-          bateCriterio = nome.includes(buscaNorm) || emp.includes(buscaNorm);
+          bateCriterio = nome.includes(buscaNorm) || emp.includes(buscaNorm) || vin.includes(buscaNorm);
         } else if (criterioBusca === 'Unidade') {
           bateCriterio = uni.includes(buscaNorm) || blo.includes(buscaNorm);
+        } else if (criterioBusca === 'Placa') {
+          bateCriterio = pla.includes(buscaNorm);
         }
 
-        const bateUniversal =
-          nome.includes(buscaNorm) ||
-          doc.includes(buscaNorm) ||
-          emp.includes(buscaNorm) ||
-          uni.includes(buscaNorm) ||
-          blo.includes(buscaNorm) ||
-          pla.includes(buscaNorm) ||
-          vin.includes(buscaNorm);
-
-        if (!bateCriterio && !bateUniversal) return false;
+        if (!bateCriterio) return false;
       }
 
       return true;
@@ -1675,14 +1663,145 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       )}
 
       {/* ========================================================================= */}
-      {/* 2. PAINEL DE CONTROLE DE TELA ÚNICA (SINGLE-PANE-OF-GLASS) */}
+      {/* 2. BARRA DE NAVEGAÇÃO PRINCIPAL: BOTÃO LISTA DE AUTORIZADOS & CONTROLES */}
       {/* ========================================================================= */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-900 p-2.5 rounded-2xl border border-slate-800 shadow-md">
+        <div className="flex items-center gap-2 overflow-x-auto py-0.5 scrollbar-none w-full sm:w-auto">
+          {/* BOTÃO PRINCIPAL: LISTA DE AUTORIZADOS */}
+          <button
+            type="button"
+            onClick={() => {
+              setAbaAtiva('cadastros');
+              setBusca('');
+              setPainelBuscaAberto(false);
+            }}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer shadow-xs active:scale-95 ${
+              abaAtiva === 'cadastros'
+                ? 'bg-purple-600 text-white shadow-purple-600/30 ring-2 ring-purple-400/40'
+                : 'bg-slate-950 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <Users className={`w-4 h-4 ${abaAtiva === 'cadastros' ? 'text-white' : 'text-purple-400'}`} />
+            <span>Lista de Autorizados</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+              abaAtiva === 'cadastros' ? 'bg-purple-800 text-purple-100' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {estatisticas.totalCadastros || cadastros.length}
+            </span>
+          </button>
+
+          {/* PRESTADORES NO LOCAL (PERMANÊNCIA) */}
+          <button
+            type="button"
+            onClick={() => {
+              setAbaAtiva('permanencia');
+              setPainelBuscaAberto(false);
+            }}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-xs active:scale-95 ${
+              abaAtiva === 'permanencia'
+                ? 'bg-blue-600 text-white shadow-blue-600/30 ring-2 ring-blue-400/40'
+                : 'bg-slate-950 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <HardHat className={`w-4 h-4 ${abaAtiva === 'permanencia' ? 'text-white' : 'text-blue-400'}`} />
+            <span>No Local</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+              abaAtiva === 'permanencia' ? 'bg-blue-800 text-blue-100' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {prestadoresAtivos.length}
+            </span>
+            {estatisticas.estourados > 0 && (
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="Prestador estourado" />
+            )}
+          </button>
+
+          {/* HISTÓRICO DE ACESSOS */}
+          <button
+            type="button"
+            onClick={() => {
+              setAbaAtiva('historico');
+              setPainelBuscaAberto(false);
+            }}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-xs active:scale-95 ${
+              abaAtiva === 'historico'
+                ? 'bg-emerald-600 text-white shadow-emerald-600/30 ring-2 ring-emerald-400/40'
+                : 'bg-slate-950 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <History className={`w-4 h-4 ${abaAtiva === 'historico' ? 'text-white' : 'text-emerald-400'}`} />
+            <span>Histórico</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+              abaAtiva === 'historico' ? 'bg-emerald-800 text-emerald-100' : 'bg-slate-800 text-slate-300'
+            }`}>
+              {visitasHoje.length + historicoAcessos.length}
+            </span>
+          </button>
+        </div>
+
+        {/* NOVA LIBERAÇÃO / CADASTRO */}
+        {permissoesOperador.cadastrar && (
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                fecharModalCadastro();
+                setModalNovoCadastro(true);
+              }}
+              className="bg-purple-600 hover:bg-purple-500 text-white font-extrabold px-3.5 py-2 rounded-xl text-xs uppercase inline-flex items-center gap-1.5 transition cursor-pointer shadow-md active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nova Liberação</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* ========================================================================= */}
-      {/* 2. PAINEL DE CONTROLE DE TELA ÚNICA: MOTOR DE BUSCA EM 5 ABAS & ACESSO RÁPIDO */}
+      {/* 3. PAINEL DE CONTROLE DE TELA ÚNICA: MOTOR DE BUSCA COM SELEÇÃO POR CPF, NOME, UNIDADE */}
       {/* ========================================================================= */}
       <div ref={containerBuscaRef} className="relative z-30 bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-800 space-y-3.5 shadow-xl">
         
+        {/* SELETOR DE CRITÉRIO DE PESQUISA: CPF, NOME, UNIDADE, PLACA */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-800/80">
+          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5 text-purple-400" />
+              <span className="hidden xs:inline">Buscar por:</span>
+            </span>
+
+            {criteriosBusca.map((crit) => {
+              const IconeCrit = crit.icone;
+              const ativo = criterioBusca === crit.id;
+              return (
+                <button
+                  key={crit.id}
+                  type="button"
+                  onClick={() => {
+                    setCriterioBusca(crit.id);
+                    inputBuscaGlobalRef.current?.focus();
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap shadow-xs active:scale-95 ${
+                    ativo
+                      ? 'bg-purple-600 text-white shadow-purple-600/30 ring-2 ring-purple-400/40'
+                      : 'bg-slate-950 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
+                  }`}
+                  title={`Filtrar especificamente por ${crit.rotulo}`}
+                >
+                  <IconeCrit className={`w-3.5 h-3.5 ${ativo ? 'text-white' : 'text-purple-400'}`} />
+                  <span>{crit.rotulo}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <span className="text-[10px] text-purple-400 font-mono font-semibold hidden md:inline-flex items-center gap-1">
+            <span>Filtro ativo:</span>
+            <strong className="uppercase bg-purple-950/60 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30">
+              {criterioBusca}
+            </strong>
+          </span>
+        </div>
+
         {/* 2. CAMPO DE BUSCA COM ÍCONE DE LUPA E BUSCA UNIVERSAL PREDITIVA */}
         <div className="relative">
           <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
@@ -1696,12 +1815,24 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                   setBusca(e.target.value);
                   if (!painelBuscaAberto) setPainelBuscaAberto(true);
                 }}
-                onFocus={() => setPainelBuscaAberto(true)}
-                placeholder="Digite nome, CPF, RG, placa ou unidade para buscar..."
-                className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-24 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
-                autoFocus
+                onFocus={() => {
+                  if (busca.trim().length > 0) setPainelBuscaAberto(true);
+                }}
+                placeholder={
+                  criterioBusca === 'CPF'
+                    ? "Digite o CPF (ex: 000.000.000-00 ou apenas números)..."
+                    : criterioBusca === 'Nome'
+                    ? "Digite o nome da pessoa ou prestador..."
+                    : criterioBusca === 'Unidade'
+                    ? "Digite a unidade ou casa (ex: 142, Bloco A)..."
+                    : "Digite a placa do veículo (ex: ABC-1234 ou BRA2E19)..."
+                }
+                className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-28 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
               />
               <div className="absolute right-3 top-3 flex items-center gap-1.5">
+                <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase text-purple-300 bg-purple-950/80 border border-purple-800/80 rounded-md">
+                  {criterioBusca}
+                </span>
                 {busca ? (
                   <button
                     type="button"
@@ -1746,7 +1877,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
               {permissoesOperador.cadastrar && (
                 <button
                   type="button"
-                  onClick={() => abrirNovoAcessoComDados('Nome', busca)}
+                  onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer min-h-[44px]"
                 >
                   <Plus className="w-4 h-4" />
@@ -1770,7 +1901,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                       Busca preditiva inteligente de pessoas e autorizados
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      {busca ? `Filtrando por: "${busca}"` : 'Digite nome, documento, placa ou unidade para filtrar em tempo real'}
+                      {busca ? `Filtrando por ${criterioBusca}: "${busca}"` : `Pesquisando por: ${criterioBusca} (digite para filtrar)`}
                     </p>
                   </div>
                 </div>
@@ -1778,7 +1909,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                 {permissoesOperador.cadastrar && (
                   <button
                     type="button"
-                    onClick={() => abrirNovoAcessoComDados('Nome', busca)}
+                    onClick={() => abrirNovoAcessoComDados(criterioBusca, busca)}
                     className="bg-purple-600 hover:bg-purple-500 text-white font-black px-4 py-2 rounded-xl text-xs uppercase flex items-center justify-center gap-2 transition shadow-md shadow-purple-600/30 active:scale-95 cursor-pointer shrink-0"
                   >
                     <Plus className="w-4 h-4" />

@@ -1,4 +1,5 @@
 import React from 'react';
+import { FileText } from 'lucide-react';
 import EmblemaInfport from './EmblemaInfport';
 import BotaoNotificacoesLembretes from './BotaoNotificacoesLembretes';
 import AlertaNoCondominioTopo from './AlertaNoCondominioTopo';
@@ -129,6 +130,17 @@ export default function HeaderBarPrincipal({
             onNavegar={() => onNavegarModulo ? onNavegarModulo('prestadores') : undefined}
           />
         )}
+
+        {/* BOTÃO RELATÓRIO ARQUITETURAL & AUDITORIA */}
+        <button
+          type="button"
+          onClick={() => onNavegarModulo ? onNavegarModulo('relatorio_arquitetural') : undefined}
+          className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-xs font-bold transition cursor-pointer"
+          title="Abrir Relatório Arquitetural e Auditoria Completa"
+        >
+          <FileText className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Auditoria & Relatório</span>
+        </button>
 
         {/* NOTIFICAÇÕES & LEMBRETES DA PORTARIA (CININHO) */}
         <div className="relative shrink-0">

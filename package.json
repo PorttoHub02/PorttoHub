@@ -1,11 +1,11 @@
 {
   "name": "porttohub",
   "private": true,
-  "version": "0211261049",
+  "version": "0211261144",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
-    "prebuild": "node scripts/atualizar-versao.cjs",
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -34,10 +34,9 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "wrangler": "^4.0.0"
+    "typescript": "^7.0.2"
   }
 }

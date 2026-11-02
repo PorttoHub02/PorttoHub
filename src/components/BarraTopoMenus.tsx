@@ -14,7 +14,8 @@ import {
   ShieldCheck,
   Building,
   Bell,
-  Users
+  Users,
+  FileText
 } from 'lucide-react';
 import ControleFonteAcessibilidade from './ControleFonteAcessibilidade';
 import { VERSAO_BUILD_ATUAL } from '../services/versaoService';
@@ -298,6 +299,26 @@ export default function BarraTopoMenus({
                       <Menu className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
                       <span>Todos os Módulos (Menu)</span>
                     </div>
+                  </button>
+                )}
+
+                {/* Relatório Arquitetural & Auditoria */}
+                {onNavegarModulo && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuSistemaAberto(false);
+                      onNavegarModulo('relatorio_arquitetural');
+                    }}
+                    className="w-full text-left px-2.5 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white transition flex items-center justify-between cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <FileText className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                      <span>Auditoria & Relatório</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                      16 Mods
+                    </span>
                   </button>
                 )}
 

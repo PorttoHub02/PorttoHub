@@ -19,6 +19,7 @@ const HistoricoAbsoluto = lazy(() => import('./pages/HistoricoAbsoluto'));
 const PainelSindico = lazy(() => import('./pages/PainelSindico'));
 const ReservaAreas = lazy(() => import('./pages/ReservaAreas'));
 const ControleAcesso = lazy(() => import('./pages/ControleAcesso'));
+const RelatorioArquitetural = lazy(() => import('./pages/RelatorioArquitetural'));
 
 // Modais sob demanda carregados apenas quando acionados pelo usuário
 const TutorialOperacionalPorttoHub = lazy(() => import('./components/TutorialOperacionalPorttoHub'));
@@ -52,6 +53,7 @@ import BotaoNotificacoesLembretes from './components/BotaoNotificacoesLembretes'
 import AlertaNoCondominioTopo from './components/AlertaNoCondominioTopo';
 import BarraTopoMenus from './components/BarraTopoMenus';
 import HeaderBarPrincipal from './components/HeaderBarPrincipal';
+import HistoricoAcessoPainelPrincipal from './components/HistoricoAcessoPainelPrincipal';
 import { checarEDispararAlarmeTrocaPlantao } from './services/lembretesService';
 import { navigationStack } from './services/navigationStackService';
 import { preCarregarDadosCondominio } from './services/deltaSyncService';
@@ -97,7 +99,8 @@ import {
   UserCheck,
   Layers,
   Calendar,
-  Scan
+  Scan,
+  FileText
 } from 'lucide-react';
 
 const CHAVE_SESSAO = 'infport_sessao_ativa_v1';
@@ -667,6 +670,79 @@ export default function App() {
     }
   };
 
+  const handleAcessoRapido = (tipo: 'admin' | 'porteiro' | 'sindico' | 'relatorio') => {
+    let op: any = null;
+    if (tipo === 'admin' || tipo === 'relatorio') {
+      op = {
+        id: 'admin_master_root',
+        nome: 'Administrador Master',
+        login: 'admin',
+        senha: '2468',
+        funcao: 'Administrador Geral',
+        cargo: 'Administrador Geral',
+        perfil: 'admin_geral',
+        nivel_acesso: 0,
+        ativo: true,
+        condominio_id: 'todos',
+        email: 'admin@porttohub.com',
+        turno_padrao: 'Geral',
+        turno: 'Geral',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+    } else if (tipo === 'porteiro') {
+      op = {
+        id: 'porteiro_demo_01',
+        nome: 'Carlos Eduardo (Porteiro Líder)',
+        login: 'porteiro',
+        senha: '123',
+        funcao: 'Porteiro Líder',
+        cargo: 'Porteiro',
+        perfil: 'porteiro',
+        nivel_acesso: 3,
+        ativo: true,
+        condominio_id: 'condo_principal_001',
+        email: 'porteiro@porttohub.com',
+        turno_padrao: 'Diurno (12x36)',
+        turno: 'Diurno',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+    } else {
+      op = {
+        id: 'sindico_demo_01',
+        nome: 'Dra. Mariana Costa (Síndica)',
+        login: 'sindico',
+        senha: '123',
+        funcao: 'Síndica Profissional',
+        cargo: 'Síndica',
+        perfil: 'sindico',
+        nivel_acesso: 4,
+        ativo: true,
+        condominio_id: 'condo_principal_001',
+        email: 'sindica@porttohub.com',
+        turno_padrao: 'Comercial',
+        turno: 'Comercial',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+    }
+
+    setOperador(op);
+    localStorage.setItem('infport_ultimo_operador_nome', op.nome);
+    localStorage.setItem(CHAVE_SESSAO, JSON.stringify({ operadorId: op.id, login: op.login, condominioId: op.condominio_id }));
+    (window as any).__operadorAtivoNome = op.nome;
+    (window as any).__operadorAtivo = op;
+    setCondominioAtivoId(op.condominio_id);
+    if (tipo === 'relatorio') {
+      setModuloAtual('relatorio_arquitetural');
+    } else if (tipo === 'sindico') {
+      setModuloAtual('painel_sindico');
+    } else {
+      setModuloAtual('dashboard');
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -1068,6 +1144,15 @@ export default function App() {
       cor: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800/60'
     });
   }
+
+  // Módulo de Relatório Técnico & Auditoria Arquitetural (Sempre disponível)
+  modulosDisponiveis.push({
+    id: 'relatorio_arquitetural',
+    titulo: 'Relatório & Auditoria',
+    icone: FileText,
+    flag: true,
+    cor: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700/60'
+  });
 
   if (operador) {
     return (
@@ -1521,6 +1606,13 @@ export default function App() {
                       );
                     })}
                   </div>
+
+                  {/* WIDGET DE HISTÓRICO DE ACESSO RECENTE NO PAINEL PRINCIPAL */}
+                  <HistoricoAcessoPainelPrincipal
+                    condominioId={condominioAtivoId || operador?.condominio_id}
+                    onNavegarModulo={(mod) => mudarModulo(mod)}
+                    usuarioLogado={operadorContextoGlobal}
+                  />
                 </div>
               </div>
             )}
@@ -1636,6 +1728,13 @@ export default function App() {
                   )}
                   {moduloAtual === 'controle_acesso' && Boolean(featureFlags.mod16_controle_acesso ?? true) && (
                     <ControleAcesso usuarioLogado={operadorContextoGlobal} />
+                  )}
+                  {moduloAtual === 'relatorio_arquitetural' && (
+                    <RelatorioArquitetural
+                      onNavegarModulo={mudarModulo}
+                      usuarioLogado={operadorContextoGlobal}
+                      onFechar={() => mudarModulo('dashboard')}
+                    />
                   )}
                 </>
               )}
@@ -2006,6 +2105,60 @@ export default function App() {
             {loading ? 'Autenticando...' : 'Entrar no Sistema'}
           </button>
         </form>
+
+        {/* ATALHOS DE ACESSO RÁPIDO PARA AUDITORIA & DEMONSTRAÇÃO */}
+        <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Acesso Rápido para Avaliação:
+            </span>
+            <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-bold">
+              1-Clique
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => handleAcessoRapido('admin')}
+              className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer"
+              title="Entrar como Administrador Geral com acesso a todos os módulos"
+            >
+              <Shield className="w-4 h-4 text-emerald-500" />
+              <span className="text-[10px] sm:text-xs">Master Admin</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleAcessoRapido('porteiro')}
+              className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer"
+              title="Entrar com perfil operacional de Porteiro da Guarita"
+            >
+              <User className="w-4 h-4 text-blue-500" />
+              <span className="text-[10px] sm:text-xs">Porteiro Líder</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleAcessoRapido('sindico')}
+              className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer"
+              title="Entrar com perfil de Síndico e consulta analítica"
+            >
+              <ShieldCheck className="w-4 h-4 text-purple-500" />
+              <span className="text-[10px] sm:text-xs">Portal Síndico</span>
+            </button>
+          </div>
+
+          {/* BOTÃO DIRETO PARA O RELATÓRIO ARQUITETURAL */}
+          <button
+            type="button"
+            onClick={() => handleAcessoRapido('relatorio')}
+            className="w-full mt-2 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600/15 via-emerald-500/20 to-indigo-600/15 hover:from-emerald-600/25 hover:to-indigo-600/25 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+          >
+            <FileText className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>Abrir Relatório Arquitetural & Auditoria Completa</span>
+          </button>
+        </div>
       </div>
 
       {/* Modal do Banco Doctor acessível também na tela de login */}
