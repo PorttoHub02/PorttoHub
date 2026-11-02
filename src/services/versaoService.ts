@@ -1,6 +1,6 @@
 /**
  * Serviço de Versionamento do Aplicativo INFPORT / PorttoHub
- * Padrão solicitado: DDMMAAHHMM (ex: 0211261409)
+ * Padrão solicitado: DDMMAAHHMM (ex: 0211261420)
  * Fuso Horário Obrigatório: Horário Oficial do Brasil (Brasília / America/Sao_Paulo - UTC-3)
  */
 
@@ -9,8 +9,8 @@ export const NOME_APLICACAO = 'PorttoHub';
 export const FUSO_HORARIO_OFICIAL_BRASIL = 'America/Sao_Paulo';
 
 // Versão de build gerada automaticamente no build (Horário de Brasília)
-export const VERSAO_BUILD_ATUAL = '0211261409';
-export const COMMIT_HASH_ATUAL = 'c2c358b';
+export const VERSAO_BUILD_ATUAL = '0211261420';
+export const COMMIT_HASH_ATUAL = '73d914c';
 
 export function gerarVersaoHorarioBrasil(data: Date = new Date()): string {
   try {
