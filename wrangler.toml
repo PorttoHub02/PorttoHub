@@ -2,9 +2,9 @@
 name = "porttohub"
 main = "worker.js"
 compatibility_date = "2024-11-01"
-compatibility_flags = ["nodejs_compat"]
 
 [assets]
 directory = "./dist"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
 html_handling = "auto-trailing-slash"

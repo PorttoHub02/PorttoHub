@@ -22,10 +22,7 @@ jobs:
           cache: 'npm'
 
       - name: Instalar Dependências
-        run: npm ci || npm install --legacy-peer-deps
-
-      - name: Executar Incremento Automático de Versão (Horário de Brasília)
-        run: node scripts/atualizar-versao.cjs
+        run: npm ci
 
       - name: Compilação de Produção (Vite Build)
         run: npm run build
@@ -35,3 +32,6 @@ jobs:
           test -f public/version.json || exit 1
           test -f dist/version.json || cp public/version.json dist/version.json
           cat public/version.json
+
+      - name: Validação de Deploy Wrangler (Dry-Run)
+        run: npx wrangler deploy --dry-run
