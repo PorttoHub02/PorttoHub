@@ -1,10 +1,8 @@
 {
-  "name": "PorttoHub - Portaria Inteligente & Gestão Condominial",
-  "description": "Sistema multi-condomínio de alta performance para portaria, encomendas, custódia, controle de acesso e reservas com Supabase PostgreSQL.",
+  "name": "PorttoHub - Controle de Acesso Portaria",
+  "description": "Painel de controle de acesso de alta performance para portarias e guaritas de condomínios. Módulo Prestadores e Visitantes com busca universal preditiva e fluxos de 1 clique.",
   "requestFramePermissions": [
     "camera"
   ],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

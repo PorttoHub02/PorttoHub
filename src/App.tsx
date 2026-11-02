@@ -52,6 +52,7 @@ import BotaoNotificacoesLembretes from './components/BotaoNotificacoesLembretes'
 import AlertaNoCondominioTopo from './components/AlertaNoCondominioTopo';
 import BarraTopoMenus from './components/BarraTopoMenus';
 import HeaderBarPrincipal from './components/HeaderBarPrincipal';
+import MenuPrincipalBuscaAcesso from './components/MenuPrincipalBuscaAcesso';
 import { checarEDispararAlarmeTrocaPlantao } from './services/lembretesService';
 import { navigationStack } from './services/navigationStackService';
 import { preCarregarDadosCondominio } from './services/deltaSyncService';
@@ -1474,6 +1475,18 @@ export default function App() {
             
             {moduloAtual === 'dashboard' && (
               <div className="max-w-5xl mx-auto space-y-4">
+                {/* Elemento de Busca do Menu Principal: 5 Abas + Caixa de Busca + Dropdown Orientativo */}
+                <MenuPrincipalBuscaAcesso
+                  condominioId={condominioAtivoId || operador?.condominio_id || ''}
+                  usuarioLogado={operadorContextoGlobal}
+                  onNovoAcesso={() => {
+                    mudarModulo('prestadores');
+                  }}
+                  onSelecionarCadastro={() => {
+                    mudarModulo('prestadores');
+                  }}
+                  onNavegarModulo={(mod) => mudarModulo(mod)}
+                />
 
                 {/* Grid dos Módulos Operacionais Otimizado e Profissional */}
                 <div className="space-y-3">

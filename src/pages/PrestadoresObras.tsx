@@ -145,6 +145,12 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
   const [filtroUnidade, setFiltroUnidade] = useState<string>('todas');
   const [mostrarFiltrosAvancados, setMostrarFiltrosAvancados] = useState(false);
 
+  // Estados dos Fluxos de 1-Clique (Fast-Lane Portaria)
+  const [tempoLimitePorPrestador, setTempoLimitePorPrestador] = useState<Record<string, number>>({});
+  const [crachaPorPrestador, setCrachaPorPrestador] = useState<Record<string, string>>({});
+  const [whatsappAutomatico, setWhatsappAutomatico] = useState<boolean>(true);
+  const inputBuscaGlobalRef = React.useRef<HTMLInputElement>(null);
+
   // Tempo e Alerta Sonoro
   const [tempoAtual, setTempoAtual] = useState(Date.now());
   const [alertaSonoroHabilitado, setAlertaSonoroHabilitado] = useState(true);
@@ -236,6 +242,73 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       osc.stop(ctx.currentTime + 0.3);
     } catch {}
   };
+
+  // Som agradável de entrada rápida (Dois tons em harmonia E5 -> A5)
+  const emitirBeepEntrada = () => {
+    if (!alertaSonoroHabilitado) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(659.25, now);
+      gain1.gain.setValueAtTime(0.15, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.25);
+
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(880, now + 0.08);
+      gain2.gain.setValueAtTime(0.2, now + 0.08);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.08);
+      osc2.stop(now + 0.38);
+    } catch {}
+  };
+
+  // Som de encerramento e saída rápida (Tom descendente D5 -> A4)
+  const emitirBeepSaida = () => {
+    if (!alertaSonoroHabilitado) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(587.33, now);
+      osc.frequency.exponentialRampToValueAtTime(440, now + 0.2);
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.25);
+    } catch {}
+  };
+
+  // Atalho de teclado global: tecla '/' ou Ctrl+K foca instantaneamente na barra de busca
+  useEffect(() => {
+    const handleKeyShortcut = (e: KeyboardEvent) => {
+      if ((e.key === '/' || (e.ctrlKey && e.key === 'k')) && document.activeElement !== inputBuscaGlobalRef.current) {
+        e.preventDefault();
+        inputBuscaGlobalRef.current?.focus();
+        inputBuscaGlobalRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', handleKeyShortcut);
+    return () => window.removeEventListener('keydown', handleKeyShortcut);
+  }, []);
 
   // Carrega dados iniciais
   useEffect(() => {
@@ -1101,8 +1174,252 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
     }
   };
 
+  // Sugestão preditiva do próximo crachá disponível
+  const sugerirProximoCracha = (): string => {
+    const crachasUsados = prestadoresAtivos
+      .map((p: any) => parseInt(p.cracha || p.cracha_atribuido || '0', 10))
+      .filter((n: number) => !isNaN(n) && n > 0);
+    const max = crachasUsados.length > 0 ? Math.max(...crachasUsados) : 10;
+    return (max + 1).toString().padStart(3, '0');
+  };
+
+  // =========================================================================
+  // FLUXOS DE 1-CLIQUE (FAST-LANE ACTIONS - SEM ABRIR MODAIS DESNECESSÁRIOS)
+  // =========================================================================
+
+  // 1. Visitante / Família: Entrada Instantânea em 1-Clique com auditoria e WhatsApp
+  const darEntradaRapidaVisitante = async (item: any) => {
+    if (!permissoesOperador.darEntrada) return;
+    setLoading(true);
+    try {
+      const agora = new Date();
+      await supabase
+        .from('prestadores')
+        .update({
+          data_hora_entrada: agora.toISOString(),
+          status_acesso: 'AUTORIZADO',
+          operador_entrada_nome: operadorNome,
+        })
+        .eq('id', item.id);
+
+      try {
+        await supabase.from('prestadores_acessos').insert([{
+          condominio_id: idCondominio,
+          prestador_id: item.id,
+          perfil_acesso: 'autorizado',
+          nome_completo: item.nome_profissional || item.nome_completo,
+          documento: item.documento || null,
+          empresa: item.parentesco_vinculo || item.empresa || 'Visitante/Família',
+          parentesco_vinculo: item.parentesco_vinculo || null,
+          unidade: item.unidade,
+          bloco: item.bloco,
+          foto_rosto: item.foto_rosto,
+          cracha: null,
+          placa_veiculo: item.placa_veiculo || null,
+          data_hora_entrada: agora.toISOString(),
+          data_hora_saida: null,
+          status_acesso: 'CONCLUIDO',
+          operador_entrada_nome: operadorNome,
+          observacoes: 'Entrada rápida de visitante (1-clique - circulação livre)'
+        }]);
+      } catch {}
+
+      await registrarAtividade({
+        modulo: 'Autorizados',
+        acao: 'ENTRADA',
+        descricao: `[1-CLIQUE] Registrou ENTRADA de ${item.nome_profissional || item.nome_completo} (Visitante/Família) para ${item.unidade} ${item.bloco || ''}.`,
+        detalhes: { pessoaId: item.id, nome: item.nome_profissional || item.nome_completo, unidade: item.unidade },
+        operador_nome: operadorNome,
+        condominio_id: idCondominio
+      });
+
+      emitirBeepEntrada();
+      if (whatsappAutomatico) {
+        dispararWhatsAppEntrada(item);
+      }
+      setMensagem({
+        tipo: 'sucesso',
+        texto: `✅ Entrada registrada! ${item.nome_profissional || item.nome_completo} liberado(a) com sucesso (1-Clique)!`
+      });
+      await carregarTudo();
+    } catch (err: any) {
+      setMensagem({ tipo: 'erro', texto: 'Erro ao registrar entrada rápida: ' + err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Prestador de Serviço: Entrada com seleção de tempo (1h, 2h, 4h, 8h) e crachá
+  const darEntradaRapidaPrestador = async (item: any) => {
+    if (!permissoesOperador.darEntrada) return;
+    setLoading(true);
+    try {
+      const agora = new Date();
+      const minutos = tempoLimitePorPrestador[item.id] || 240;
+      const cracha = crachaPorPrestador[item.id] || item.cracha_atribuido || sugerirProximoCracha();
+      const limitePermanencia = new Date(agora.getTime() + minutos * 60000).toISOString();
+
+      await supabase
+        .from('prestadores')
+        .update({
+          status_acesso: 'DENTRO',
+          data_hora_entrada: agora.toISOString(),
+          data_hora_saida: null,
+          cracha_atribuido: cracha || null,
+          tempo_maximo_minutos: minutos,
+          limite_permanencia_ate: limitePermanencia,
+          operador_entrada_nome: operadorNome,
+        })
+        .eq('id', item.id);
+
+      try {
+        await supabase.from('prestadores_acessos').insert([{
+          condominio_id: idCondominio,
+          prestador_id: item.id,
+          perfil_acesso: item.perfil_acesso || 'prestador_unidade',
+          nome_completo: item.nome_profissional || item.nome_completo,
+          documento: item.documento,
+          empresa: item.empresa,
+          parentesco_vinculo: item.parentesco_vinculo,
+          unidade: item.unidade,
+          bloco: item.bloco,
+          foto_rosto: item.foto_rosto,
+          cracha: cracha || null,
+          placa_veiculo: item.placa_veiculo || null,
+          data_hora_entrada: agora.toISOString(),
+          tempo_maximo_minutos: minutos,
+          limite_permanencia_ate: limitePermanencia,
+          status_acesso: 'DENTRO',
+          operador_entrada_nome: operadorNome,
+          observacoes: 'Entrada rápida 1-clique com crachá e tempo'
+        }]);
+      } catch {}
+
+      await registrarAtividade({
+        modulo: 'Autorizados',
+        acao: 'ENTRADA',
+        descricao: `[1-CLIQUE] Registrou ENTRADA de prestador ${item.nome_profissional || item.nome_completo}. Crachá #${cracha || 'N/A'}, Limite: ${Math.floor(minutos / 60)}h.`,
+        detalhes: { pessoaId: item.id, nome: item.nome_profissional || item.nome_completo, cracha, tempoMaximo: minutos },
+        operador_nome: operadorNome,
+        condominio_id: idCondominio
+      });
+
+      emitirBeepEntrada();
+      if (whatsappAutomatico) {
+        dispararWhatsAppEntrada({ ...item, cracha, limite_permanencia_ate: limitePermanencia });
+      }
+      const horaFmt = new Date(limitePermanencia).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      setMensagem({
+        tipo: 'sucesso',
+        texto: `✅ Prestador ${item.nome_profissional || item.nome_completo} em trânsito! Crachá #${cracha} (Limite até às ${horaFmt}).`
+      });
+      await carregarTudo();
+    } catch (err: any) {
+      setMensagem({ tipo: 'erro', texto: 'Erro ao registrar entrada rápida: ' + err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 3. Prestador Dentro: Saída Imediata em 1-Clique (devolve crachá, audita e calcula tempo)
+  const darSaidaRapidaPrestador = async (item: any) => {
+    if (!permissoesOperador.darSaida) return;
+    setLoading(true);
+    try {
+      const agora = new Date().toISOString();
+      const targetId = item.prestador_id || item.id;
+
+      await supabase
+        .from('prestadores')
+        .update({
+          status_acesso: 'AUTORIZADO',
+          data_hora_saida: agora,
+          operador_saida_nome: operadorNome
+        })
+        .eq('id', targetId);
+
+      try {
+        await supabase
+          .from('prestadores_acessos')
+          .update({
+            data_hora_saida: agora,
+            status_acesso: 'CONCLUIDO',
+            operador_saida_nome: operadorNome
+          })
+          .eq('status_acesso', 'DENTRO')
+          .eq('prestador_id', targetId);
+      } catch {}
+
+      await registrarAtividade({
+        modulo: 'Autorizados',
+        acao: 'SAIDA',
+        descricao: `[1-CLIQUE] Registrou SAÍDA do prestador ${item.nome_completo || item.nome_profissional}. Crachá devolvido.`,
+        detalhes: { nome: item.nome_completo || item.nome_profissional, cracha: item.cracha || item.cracha_atribuido },
+        operador_nome: operadorNome,
+        condominio_id: idCondominio
+      });
+
+      emitirBeepSaida();
+      setMensagem({
+        tipo: 'sucesso',
+        texto: `✅ Saída de ${item.nome_completo || item.nome_profissional} concluída com sucesso! Crachá liberado.`
+      });
+      await carregarTudo();
+    } catch (err: any) {
+      setMensagem({ tipo: 'erro', texto: 'Erro ao registrar saída rápida: ' + err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4. Prorrogação Rápida (+30m, +1h) em 1-Clique
+  const prorrogarRapidoPrestador = async (item: any, minutosAdicionais: number) => {
+    setLoading(true);
+    try {
+      const tAntigo = item.limite_permanencia_ate ? new Date(item.limite_permanencia_ate).getTime() : Date.now();
+      const novoLimite = new Date(Math.max(Date.now(), tAntigo) + minutosAdicionais * 60000).toISOString();
+      const novoLimiteFmt = new Date(novoLimite).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const targetId = item.prestador_id || item.id;
+
+      await supabase
+        .from('prestadores')
+        .update({ limite_permanencia_ate: novoLimite })
+        .eq('id', targetId);
+
+      try {
+        await supabase
+          .from('prestadores_acessos')
+          .update({ limite_permanencia_ate: novoLimite })
+          .eq('status_acesso', 'DENTRO')
+          .eq('prestador_id', targetId);
+      } catch {}
+
+      await registrarAtividade({
+        modulo: 'Autorizados',
+        acao: 'EDITAR',
+        descricao: `[1-CLIQUE] Prorrogou permanência de ${item.nome_completo || item.nome_profissional} em +${minutosAdicionais}m (Até ${novoLimiteFmt}).`,
+        detalhes: { novoLimite, minutosAdicionados: minutosAdicionais },
+        operador_nome: operadorNome,
+        condominio_id: idCondominio
+      });
+
+      emitirBeepEntrada();
+      setMensagem({
+        tipo: 'sucesso',
+        texto: `⏱️ Tempo prorrogado em +${minutosAdicionais}m para ${item.nome_completo || item.nome_profissional} (Novo limite: até às ${novoLimiteFmt})!`
+      });
+      await carregarTudo();
+    } catch (err: any) {
+      setMensagem({ tipo: 'erro', texto: 'Erro ao prorrogar: ' + err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Filtragem Dinâmica por Categoria, Status, Busca e Unidade
   const cadastrosFiltrados = useMemo(() => {
+    const buscaNorm = busca.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
     return cadastros.filter((c: any) => {
       // 1. Filtro por Categoria de Entrada
       if (filtroCategoria !== 'todos') {
@@ -1110,8 +1427,10 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       }
 
       // 2. Filtro por Status
+      const prestadorNoLocal = prestadoresAtivos.find((a: any) => (a.prestador_id || a.id) === c.id);
+      const estaDentro = Boolean(prestadorNoLocal);
+
       if (filtroStatus === 'dentro') {
-        const estaDentro = prestadoresAtivos.some((a: any) => (a.prestador_id || a.id) === c.id);
         if (!estaDentro) return false;
       } else if (filtroStatus === 'entradas_hoje') {
         const dataHojeStr = new Date().toISOString().slice(0, 10);
@@ -1130,38 +1449,53 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
         if ((c.unidade || '').toString().trim() !== filtroUnidade) return false;
       }
 
-      // 4. Busca em tempo real
-      if (busca.trim()) {
-        const b = busca.toLowerCase();
-        const nome = (c.nome_profissional || c.nome_completo || '').toLowerCase();
-        const doc = (c.documento || '').toLowerCase();
-        const emp = (c.empresa || '').toLowerCase();
-        const uni = (c.unidade || '').toLowerCase();
-        const blo = (c.bloco || '').toLowerCase();
-        const pla = (c.placa_veiculo || '').toLowerCase();
-        const vin = (c.parentesco_vinculo || '').toLowerCase();
-        const bate = nome.includes(b) || doc.includes(b) || emp.includes(b) || uni.includes(b) || blo.includes(b) || pla.includes(b) || vin.includes(b);
+      // 4. Busca Preditiva Universal em tempo real (Nome, Documento, Empresa, Unidade, Bloco, Placa)
+      if (buscaNorm) {
+        const nome = (c.nome_profissional || c.nome_completo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const doc = (c.documento || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const emp = (c.empresa || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const uni = (c.unidade || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const blo = (c.bloco || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const pla = (c.placa_veiculo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const vin = (c.parentesco_vinculo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        const bate =
+          nome.includes(buscaNorm) ||
+          doc.includes(buscaNorm) ||
+          emp.includes(buscaNorm) ||
+          uni.includes(buscaNorm) ||
+          blo.includes(buscaNorm) ||
+          pla.includes(buscaNorm) ||
+          vin.includes(buscaNorm);
+
         if (!bate) return false;
       }
 
       return true;
     }).sort((a: any, b: any) => {
-      // Ordenação: liberações vencidas vão para o final da lista (ativos primeiro, vencidos por último)
+      // Ordenação: pessoas que estão DENTRO ou ESTOURADAS aparecem com máxima prioridade no topo
+      const estaDentroA = prestadoresAtivos.some((p: any) => (p.prestador_id || p.id) === a.id);
+      const estaDentroB = prestadoresAtivos.some((p: any) => (p.prestador_id || p.id) === b.id);
+      if (estaDentroA !== estaDentroB) {
+        return estaDentroA ? -1 : 1;
+      }
+
+      // Critério secundário: liberações vencidas vão para o final
       const aVal = checarValidade(a);
       const bVal = checarValidade(b);
       const aExpirou = aVal.expirou ? 1 : 0;
       const bExpirou = bVal.expirou ? 1 : 0;
-
       if (aExpirou !== bExpirou) {
         return aExpirou - bExpirou;
       }
 
-      // Critério secundário: registros mais recentes primeiro
+      // Critério terciário: registros mais recentes primeiro
       const dataA = a.created_at ? new Date(a.created_at).getTime() : 0;
       const dataB = b.created_at ? new Date(b.created_at).getTime() : 0;
       return dataB - dataA;
     });
   }, [cadastros, filtroCategoria, filtroStatus, busca, filtroUnidade, prestadoresAtivos]);
+
 
   // Lista única de unidades para o filtro
   const listaUnidadesDisponiveis = useMemo(() => {
@@ -1277,281 +1611,290 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       )}
 
       {/* ========================================================================= */}
-      {/* 2. NAVEGAÇÃO ENTRE ABAS DO PAINEL */}
+      {/* 2. PAINEL DE CONTROLE DE TELA ÚNICA (SINGLE-PANE-OF-GLASS) */}
       {/* ========================================================================= */}
-      <div className="space-y-2 border-b border-slate-800 pb-3 w-full">
-        {/* Linha 1 Exclusiva: Gestão de Acessos */}
-        <button
-          type="button"
-          onClick={() => setAbaAtiva('cadastros')}
-          className={`w-full py-2.5 px-3.5 rounded-xl text-xs sm:text-sm font-bold transition flex items-center justify-between cursor-pointer border ${
-            abaAtiva === 'cadastros'
-              ? 'bg-purple-600 hover:bg-purple-500 text-white border-purple-500 shadow-sm'
-              : 'bg-slate-900 text-slate-300 hover:bg-slate-850 hover:text-white border-slate-800'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-purple-300 shrink-0" />
-            <span className="uppercase font-black text-xs sm:text-sm tracking-wide">Gestão de Acessos</span>
-            <span className="text-[11px] text-slate-400 font-normal hidden sm:inline">• Lista e Liberação de Autorizados</span>
-          </div>
-          <span className={`px-2 py-0.5 rounded-lg text-[11px] font-mono font-bold ${
-            abaAtiva === 'cadastros'
-              ? 'bg-purple-950/80 text-purple-200 border border-purple-400/30'
-              : 'bg-slate-800 text-slate-300 border border-slate-700'
-          }`}>
-            {cadastros.length} {cadastros.length === 1 ? 'liberado' : 'liberados'}
-          </span>
-        </button>
 
-        {/* Linha 2 Abaixo: Permanência de Prestadores e Histórico (Lado a Lado) */}
-        <div className="grid grid-cols-2 gap-2">
-          {/* Aba 2: Prestadores no Local (Permanência Controlada) */}
-          <button
-            type="button"
-            onClick={() => setAbaAtiva('permanencia')}
-            className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer border ${
-              abaAtiva === 'permanencia'
-                ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500 shadow-sm'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-850 hover:text-white border-slate-800'
-            }`}
-          >
-            <div className="flex items-center gap-1.5 truncate">
-              <Timer className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-              <span className="truncate">Permanência Prestadores</span>
-            </div>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black shrink-0 ${
-              estatisticas.estourados > 0 
-                ? 'bg-red-600 text-white animate-pulse' 
-                : abaAtiva === 'permanencia'
-                ? 'bg-blue-950 text-blue-200'
-                : 'bg-slate-800 text-slate-300'
-            }`}>
-              {estatisticas.prestadoresDentro}
-            </span>
-          </button>
-
-          {/* Aba 3: Histórico de Acessos Auditados */}
-          <button
-            type="button"
-            onClick={() => setAbaAtiva('historico')}
-            className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer border ${
-              abaAtiva === 'historico'
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500 shadow-sm'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-850 hover:text-white border-slate-800'
-            }`}
-          >
-            <div className="flex items-center gap-1.5 truncate">
-              <Clock className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
-              <span className="truncate">Histórico de Acessos</span>
-            </div>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold shrink-0 ${
-              abaAtiva === 'historico'
-                ? 'bg-indigo-950 text-indigo-200'
-                : 'bg-slate-800 text-slate-300'
-            }`}>
-              {historicoAcessos.length}
-            </span>
-          </button>
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* ABA 1: GESTÃO DE ACESSOS & FILTROS POR CATEGORIA DE ENTRADA */}
-      {/* ========================================================================= */}
-      {abaAtiva === 'cadastros' && (
-        <div className="space-y-3.5">
-          
-          {/* BARRA DE FILTROS POR CATEGORIA DE ENTRADA (VISUALIZAÇÃO INTUITIVA) */}
-          <div className="bg-slate-900 p-3 sm:p-4 rounded-2xl border border-slate-800 space-y-3 shadow-sm">
-            
-            {/* 1. Categorias de Entrada (Botões/Chips em Destaque) */}
-            <div>
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <label className="text-[11px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                  <Filter className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Filtrar por:</span>
-                </label>
-
-                {/* Botão Filtrar que recolhe e abre as 2 listas de seleção e a barra de pesquisa */}
-                <button
-                  type="button"
-                  onClick={() => setMostrarFiltrosAvancados(!mostrarFiltrosAvancados)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
-                    mostrarFiltrosAvancados || (busca.trim() || filtroStatus !== 'todos' || filtroUnidade !== 'todas')
-                      ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
-                      : 'bg-slate-950 text-slate-300 border-slate-700 hover:bg-slate-800'
-                  }`}
-                  title="Abrir ou recolher filtros de status, unidade e busca"
-                >
-                  <Search className="w-3 h-3" />
-                  <span>Filtrar</span>
-                  {(busca.trim() || filtroStatus !== 'todos' || filtroUnidade !== 'todas') && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  )}
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${mostrarFiltrosAvancados ? 'rotate-180' : ''}`} />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {/* Todas as Categorias */}
-                <button
-                  type="button"
-                  onClick={() => setFiltroCategoria('todos')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-between cursor-pointer ${
-                    filtroCategoria === 'todos'
-                      ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-600/20 font-black'
-                      : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <UserCheck className="w-3.5 h-3.5" /> Todas as Pessoas
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-900/80">
-                    {cadastros.length}
-                  </span>
-                </button>
-
-                {/* Categoria 1: Visitantes & Família (Sem saída necessária!) */}
-                <button
-                  type="button"
-                  onClick={() => setFiltroCategoria('autorizado')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-between cursor-pointer ${
-                    filtroCategoria === 'autorizado'
-                      ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-600/20 font-black'
-                      : 'bg-purple-950/20 text-purple-300 border-purple-900/60 hover:bg-purple-950/40'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-purple-400" /> Visitantes & Família
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-purple-900/60 text-purple-200">
-                    {cadastros.filter(c => c.perfil_acesso === 'autorizado').length}
-                  </span>
-                </button>
-
-                {/* Categoria 2: Prestadores da Unidade (Obras e Serviços com Saída) */}
-                <button
-                  type="button"
-                  onClick={() => setFiltroCategoria('prestador_unidade')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-between cursor-pointer ${
-                    filtroCategoria === 'prestador_unidade'
-                      ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-600/20 font-black'
-                      : 'bg-blue-950/20 text-blue-300 border-blue-900/60 hover:bg-blue-950/40'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <HardHat className="w-3.5 h-3.5 text-blue-400" /> Prestador da Unidade
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-blue-900/60 text-blue-200">
-                    {cadastros.filter(c => c.perfil_acesso === 'prestador_unidade').length}
-                  </span>
-                </button>
-
-                {/* Categoria 3: Prestadores do Condomínio (Manutenção Predial) */}
-                <button
-                  type="button"
-                  onClick={() => setFiltroCategoria('prestador_condominio')}
-                  className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-between cursor-pointer ${
-                    filtroCategoria === 'prestador_condominio'
-                      ? 'bg-amber-600 text-white border-amber-500 shadow-md shadow-amber-600/20 font-black'
-                      : 'bg-amber-950/20 text-amber-300 border-amber-900/60 hover:bg-amber-950/40'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5 text-amber-400" /> Condomínio / Obras
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-900/60 text-amber-200">
-                    {cadastros.filter(c => c.perfil_acesso === 'prestador_condominio').length}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* 2. Subfiltros de Status, Unidade e Busca (Recolhidos por padrão, abertos quando selecionado) */}
-            {(mostrarFiltrosAvancados || (busca.trim() || filtroStatus !== 'todos' || filtroUnidade !== 'todas')) && (
-              <div className="space-y-2.5 pt-1 animate-in fade-in duration-150">
-                {/* As 2 listas lado a lado */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {/* Filtro por Status */}
-                  <div>
-                    <select
-                      value={filtroStatus}
-                      onChange={(e: any) => setFiltroStatus(e.target.value)}
-                      className="w-full bg-slate-950 text-white text-xs p-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-purple-500 font-semibold cursor-pointer"
-                    >
-                      <option value="todos">Todos os Status</option>
-                      <option value="dentro">⏱️ Prestadores Presentes Agora</option>
-                      <option value="entradas_hoje">🚪 Entradas Registradas Hoje</option>
-                      <option value="validos">🟢 Liberações Válidas</option>
-                      <option value="vencidos">⚠️ Liberações Vencidas / Expiradas</option>
-                    </select>
-                  </div>
-
-                  {/* Filtro por Unidade / Casa */}
-                  <div>
-                    <select
-                      value={filtroUnidade}
-                      onChange={(e) => setFiltroUnidade(e.target.value)}
-                      className="w-full bg-slate-950 text-white text-xs p-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-purple-500 font-semibold cursor-pointer"
-                    >
-                      <option value="todas">Todas as Unidades</option>
-                      {listaUnidadesDisponiveis.map(u => (
-                        <option key={u} value={u}>
-                          {eEstruturaCasas ? `Casa ${u}` : `Apto/Unidade ${u}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Campo de Busca Rápida */}
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                  <input
-                    type="text"
-                    value={busca}
-                    onChange={(e) => setBusca(e.target.value)}
-                    placeholder="Buscar por nome, CPF/RG, unidade, placa ou empresa..."
-                    className="w-full bg-slate-950 text-white text-xs pl-9 pr-8 py-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-purple-500"
-                  />
-                  {busca && (
-                    <button
-                      type="button"
-                      onClick={() => setBusca('')}
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Contador de Resultados e Botão de Limpar */}
-            <div className="flex items-center justify-between text-xs text-slate-400 pt-1 border-t border-slate-800/80">
-              <span className="flex items-center gap-1.5">
-                Exibindo <strong className="text-white">{cadastrosFiltrados.length}</strong> pessoa(s) autorizada(s)
-              </span>
-
-              {(busca.trim() || filtroCategoria !== 'todos' || filtroStatus !== 'todos' || filtroUnidade !== 'todas') && (
+      {/* 2.1 BARRA DE BUSCA GLOBAL UNIVERSAL E PREDITIVA (PONTO FOCAL ABSOLUTO) */}
+      <div className="bg-slate-900 p-3 sm:p-4 rounded-2xl border border-slate-800 space-y-3 shadow-md">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+          {/* Input de Busca Universal em Tempo Real */}
+          <div className="relative flex-1">
+            <Search className="w-5 h-5 absolute left-3.5 top-3.5 text-purple-400 pointer-events-none" />
+            <input
+              ref={inputBuscaGlobalRef}
+              type="text"
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Busca rápida: Nome, CPF/RG, Unidade (Casa 142), Placa (ABC-1234) ou Empresa..."
+              className="w-full bg-slate-950 text-white text-sm sm:text-base pl-11 pr-24 py-3 rounded-xl border-2 border-slate-700/80 focus:outline-none focus:border-purple-500 transition-all font-semibold placeholder:text-slate-500 shadow-inner"
+              autoFocus
+            />
+            <div className="absolute right-3 top-3 flex items-center gap-1.5">
+              {busca ? (
                 <button
                   type="button"
                   onClick={() => {
                     setBusca('');
-                    setFiltroCategoria('todos');
-                    setFiltroStatus('todos');
-                    setFiltroUnidade('todas');
+                    inputBuscaGlobalRef.current?.focus();
                   }}
-                  className="text-[11px] text-red-400 hover:text-red-300 font-bold flex items-center gap-1 cursor-pointer"
+                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  title="Limpar busca"
                 >
-                  <X className="w-3.5 h-3.5" /> Limpar Filtros
+                  <X className="w-4 h-4" />
                 </button>
+              ) : (
+                <kbd className="hidden sm:inline-block px-2 py-0.5 text-[11px] font-mono text-slate-400 bg-slate-800 border border-slate-700 rounded shadow-xs">
+                  /
+                </kbd>
               )}
             </div>
           </div>
 
-          {/* LISTA DE PESSOAS AUTORIZADAS COM AÇÕES INTELIGENTES */}
+          {/* Toggle de WhatsApp Automático e Ação Nova Liberação */}
+          <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0">
+            <label
+              htmlFor="toggle-whatsapp-auto"
+              className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer select-none hover:border-slate-700 transition"
+              title="Disparar link formatado do WhatsApp automaticamente ao registrar entrada"
+            >
+              <input
+                id="toggle-whatsapp-auto"
+                type="checkbox"
+                checked={whatsappAutomatico}
+                onChange={(e) => setWhatsappAutomatico(e.target.checked)}
+                className="w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-900 border-slate-700"
+              />
+              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">WhatsApp Automático</span>
+                <span className="sm:hidden">WhatsApp</span>
+              </span>
+            </label>
+
+            {permissoesOperador.cadastrar && (
+              <button
+                type="button"
+                onClick={() => {
+                  fecharModalCadastro();
+                  setModalNovoCadastro(true);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer min-h-[44px]"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">Nova Liberação</span>
+                <span className="sm:hidden">Novo</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 2.2 ATALHOS RÁPIDOS DE STATUS E FILTROS DINÂMICOS */}
+        <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold">
+            {/* Todos */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroCategoria('todos');
+                setFiltroStatus('todos');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                abaAtiva === 'cadastros' && filtroCategoria === 'todos' && filtroStatus === 'todos'
+                  ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 text-purple-400" />
+              <span>Todos</span>
+              <span className="font-mono text-[11px] opacity-75">({cadastros.length})</span>
+            </button>
+
+            {/* Estourados com Alarme Visual Destacado */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('permanencia');
+                setFiltroStatus('dentro');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                estatisticas.estourados > 0
+                  ? 'bg-red-600 text-white border-red-500 animate-pulse font-black shadow-md shadow-red-600/30'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Estourados</span>
+              <span className="font-mono text-[11px] px-1.5 rounded-full bg-red-950 text-white">
+                {estatisticas.estourados}
+              </span>
+            </button>
+
+            {/* Dentro Agora (Prestadores com Permanência) */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroStatus('dentro');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                filtroStatus === 'dentro'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                  : 'bg-blue-950/30 text-blue-300 border-blue-900/60 hover:bg-blue-950/50'
+              }`}
+            >
+              <Timer className="w-3.5 h-3.5 text-blue-400" />
+              <span>Dentro Agora</span>
+              <span className="font-mono text-[11px] px-1.5 rounded-full bg-blue-900 text-blue-200">
+                {estatisticas.prestadoresDentro}
+              </span>
+            </button>
+
+            {/* Visitantes & Família */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroCategoria('autorizado');
+                setFiltroStatus('todos');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                filtroCategoria === 'autorizado' && filtroStatus !== 'dentro'
+                  ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <span>Visitantes / Família</span>
+              <span className="font-mono text-[11px] opacity-75">
+                ({cadastros.filter(c => c.perfil_acesso === 'autorizado').length})
+              </span>
+            </button>
+
+            {/* Prestadores da Unidade */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroCategoria('prestador_unidade');
+                setFiltroStatus('todos');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                filtroCategoria === 'prestador_unidade' && filtroStatus !== 'dentro'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <HardHat className="w-3.5 h-3.5 text-blue-400" />
+              <span>Prestador Unidade</span>
+              <span className="font-mono text-[11px] opacity-75">
+                ({cadastros.filter(c => c.perfil_acesso === 'prestador_unidade').length})
+              </span>
+            </button>
+
+            {/* Prestadores do Condomínio / Obras */}
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroCategoria('prestador_condominio');
+                setFiltroStatus('todos');
+              }}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                filtroCategoria === 'prestador_condominio' && filtroStatus !== 'dentro'
+                  ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Condomínio / Obras</span>
+              <span className="font-mono text-[11px] opacity-75">
+                ({cadastros.filter(c => c.perfil_acesso === 'prestador_condominio').length})
+              </span>
+            </button>
+
+            {/* Histórico de Acessos */}
+            <button
+              type="button"
+              onClick={() => setAbaAtiva(abaAtiva === 'historico' ? 'cadastros' : 'historico')}
+              className={`px-3 py-1.5 rounded-xl border transition flex items-center gap-1.5 cursor-pointer ${
+                abaAtiva === 'historico'
+                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Histórico</span>
+              <span className="font-mono text-[11px] opacity-75">({historicoAcessos.length})</span>
+            </button>
+          </div>
+
+          {/* Contador de Filtrados e Botão Limpar */}
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span>
+              <strong className="text-white">{cadastrosFiltrados.length}</strong> pessoa(s) listada(s)
+            </span>
+            {(busca.trim() || filtroCategoria !== 'todos' || filtroStatus !== 'todos') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setBusca('');
+                  setFiltroCategoria('todos');
+                  setFiltroStatus('todos');
+                  setAbaAtiva('cadastros');
+                }}
+                className="text-[11px] text-red-400 hover:text-red-300 font-bold ml-1 cursor-pointer flex items-center gap-0.5"
+              >
+                <X className="w-3 h-3" /> Limpar
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* BANNER PERSISTENTE DE ALARME DE TEMPO ESTOURADO */}
+      {estatisticas.estourados > 0 && (
+        <div className="p-3.5 rounded-2xl bg-red-600 text-white shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-pulse border-2 border-red-400">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-white/20 rounded-xl shrink-0">
+              <ShieldAlert className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <p className="text-sm font-black uppercase tracking-wide">
+                ALERTA GUANTA: {estatisticas.estourados} PRESTADOR(ES) COM TEMPO ESTOURADO!
+              </p>
+              <p className="text-xs text-red-100">
+                O limite de permanência foi ultrapassado. Verifique com a unidade ou registre a saída imediata.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              onClick={emitirAlertaSonoro}
+              className="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              title="Testar alarme sonoro"
+            >
+              <Volume2 className="w-4 h-4" /> Som
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAbaAtiva('cadastros');
+                setFiltroStatus('dentro');
+              }}
+              className="px-4 py-2 bg-white text-red-700 hover:bg-red-50 rounded-xl text-xs font-black transition cursor-pointer shadow-sm uppercase tracking-wide"
+            >
+              Ver Estourados
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 3. LISTA DINÂMICA DE PESSOAS (CARD DESIGN ULTRA-RÁPIDO COM 1-CLIQUE) */}
+      {/* ========================================================================= */}
+      {abaAtiva === 'cadastros' && (
+        <div className="space-y-3.5">
           {cadastrosFiltrados.length === 0 ? (
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-10 text-center space-y-3">
               <Users className="w-12 h-12 text-slate-600 mx-auto" />
@@ -1689,15 +2032,125 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                       </div>
                     </div>
 
-                    {/* AÇÕES DE ENTRADA, SAÍDA E EDIÇÃO */}
-                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                      
+                    {/* SEÇÃO DE STATUS E CRONÔMETRO (SE ESTIVER DENTRO) */}
+                    {jaEstaDentro && (
+                      <div className="w-full md:w-auto my-2 md:my-0 flex items-center gap-2">
+                        {(() => {
+                          const infoPerm = checarPermanencia(prestadorNoLocal || item);
+                          return (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`px-2.5 py-1 rounded-xl text-xs font-black font-mono border flex items-center gap-1.5 ${
+                                infoPerm.estourado
+                                  ? 'bg-red-600 text-white border-red-500 animate-pulse'
+                                  : infoPerm.status === 'alerta'
+                                  ? 'bg-amber-500 text-slate-950 border-amber-400 font-extrabold'
+                                  : 'bg-blue-950 text-blue-300 border-blue-800'
+                              }`}>
+                                <Timer className="w-3.5 h-3.5" />
+                                <span>{infoPerm.texto}</span>
+                              </span>
+
+                              {/* Crachá */}
+                              {(prestadorNoLocal?.cracha || item.cracha_atribuido) && (
+                                <span className="text-[11px] font-mono text-slate-300 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700">
+                                  Crachá: <strong className="text-white font-bold">#{prestadorNoLocal?.cracha || item.cracha_atribuido}</strong>
+                                </span>
+                              )}
+
+                              {/* Prorrogação Rápida em 1-Clique */}
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => prorrogarRapidoPrestador(prestadorNoLocal || item, 30)}
+                                  className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                                  title="Prorrogar 30 minutos em 1-clique"
+                                >
+                                  +30m
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => prorrogarRapidoPrestador(prestadorNoLocal || item, 60)}
+                                  className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                                  title="Prorrogar 1 hora em 1-clique"
+                                >
+                                  +1h
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {/* SELEÇÃO RÁPIDA DE DURAÇÃO E CRACHÁ (SE PRESTADOR FORA) */}
+                    {!jaEstaDentro && !ehVisitante && (
+                      <div className="w-full md:w-auto my-2 md:my-0 flex items-center gap-2 flex-wrap bg-slate-950/60 p-1.5 rounded-xl border border-slate-800">
+                        {/* Chips de Duração 1h, 2h, 4h, 8h */}
+                        <div className="flex items-center gap-1">
+                          {[60, 120, 240, 480].map((mins) => {
+                            const selecionado = (tempoLimitePorPrestador[item.id] || 240) === mins;
+                            return (
+                              <button
+                                key={mins}
+                                type="button"
+                                onClick={() => setTempoLimitePorPrestador((prev) => ({ ...prev, [item.id]: mins }))}
+                                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition ${
+                                  selecionado
+                                    ? 'bg-blue-600 text-white shadow-xs'
+                                    : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                                }`}
+                              >
+                                {mins / 60}h
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Input de Crachá Rápido */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] font-mono text-slate-500">#</span>
+                          <input
+                            type="text"
+                            value={crachaPorPrestador[item.id] !== undefined ? crachaPorPrestador[item.id] : (item.cracha_atribuido || sugerirProximoCracha())}
+                            onChange={(e) => setCrachaPorPrestador((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                            placeholder="Crachá"
+                            className="w-14 bg-slate-900 text-white text-xs font-mono font-bold text-center px-1.5 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-blue-500"
+                            title="Número do crachá para este acesso"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AÇÕES DE ENTRADA, SAÍDA E EDIÇÃO (TOUCH-FRIENDLY >= 44px) */}
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center flex-wrap">
+                      {/* Telefone / Ligação direta */}
+                      {item.telefone && (
+                        <a
+                          href={`tel:${item.telefone}`}
+                          className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition flex items-center justify-center min-w-[42px] min-h-[42px]"
+                          title={`Ligar para ${item.nome_profissional || item.nome_completo}`}
+                        >
+                          <Phone className="w-4 h-4" />
+                        </a>
+                      )}
+
+                      {/* Notificar WhatsApp */}
+                      <button
+                        type="button"
+                        onClick={() => dispararWhatsAppEntrada(item)}
+                        className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition cursor-pointer flex items-center justify-center min-w-[42px] min-h-[42px]"
+                        title="Enviar mensagem WhatsApp ao morador"
+                        aria-label="Notificar WhatsApp"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </button>
+
                       {/* Editar Cadastro */}
                       {permissoesOperador.editar && (
                         <button
                           type="button"
                           onClick={() => abrirEdicaoCadastro(item)}
-                          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer"
+                          className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer flex items-center justify-center min-w-[42px] min-h-[42px]"
                           title="Editar cadastro ou renovar validade"
                           aria-label="Editar cadastro"
                         >
@@ -1705,56 +2158,59 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
                         </button>
                       )}
 
-                      {/* Notificar WhatsApp */}
-                      <button
-                        type="button"
-                        onClick={() => dispararWhatsAppEntrada(item)}
-                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition cursor-pointer"
-                        title="Enviar mensagem WhatsApp ao morador"
-                        aria-label="Notificar WhatsApp"
-                      >
-                        <MessageSquare className="w-4 h-4" />
-                      </button>
-
-                      {/* BOTÃO DE ENTRADA / SAÍDA ESPECÍFICO POR CATEGORIA */}
+                      {/* BOTÕES DE FLUXO DE 1-CLIQUE */}
                       {ehVisitante ? (
-                        /* VISITANTES: SÓ DAR ENTRADA */
+                        /* VISITANTES: 1-CLIQUE ENTRADA DIRETA */
                         <button
                           type="button"
-                          onClick={() => abrirModalEntradaPara(item)}
-                          disabled={!permissoesOperador.darEntrada}
-                          className="bg-purple-600 hover:bg-purple-500 text-white font-black px-3.5 py-2 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer disabled:bg-slate-800 disabled:text-slate-500"
-                          title="Registrar entrada do visitante"
+                          onClick={() => darEntradaRapidaVisitante(item)}
+                          disabled={!permissoesOperador.darEntrada || loading}
+                          className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-2 transition shadow-sm cursor-pointer disabled:bg-slate-800 disabled:text-slate-500 min-h-[44px]"
+                          title="Registrar entrada do visitante em 1-clique"
                         >
-                          <LogIn className="w-3.5 h-3.5" />
-                          <span>Dar Entrada</span>
+                          <LogIn className="w-4 h-4" />
+                          <span>Dar Entrada (1-Clique)</span>
                         </button>
                       ) : jaEstaDentro ? (
-                        /* PRESTADOR DENTRO: DAR SAÍDA */
+                        /* PRESTADOR DENTRO: 1-CLIQUE DAR SAÍDA */
                         <button
                           type="button"
-                          onClick={() => abrirModalSaidaPara(prestadorNoLocal || item)}
-                          disabled={!permissoesOperador.darSaida}
-                          className="bg-red-600 hover:bg-red-500 text-white font-black px-3.5 py-2 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer disabled:bg-slate-800 disabled:text-slate-500"
+                          onClick={() => darSaidaRapidaPrestador(prestadorNoLocal || item)}
+                          disabled={!permissoesOperador.darSaida || loading}
+                          className="bg-red-600 hover:bg-red-500 active:scale-95 text-white font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-2 transition shadow-md shadow-red-600/20 cursor-pointer disabled:bg-slate-800 disabled:text-slate-500 min-h-[44px]"
+                          title="Registrar saída imediata (devolve crachá)"
                         >
-                          <LogOut className="w-3.5 h-3.5" />
-                          <span>Dar Saída</span>
+                          <LogOut className="w-4 h-4" />
+                          <span>Dar Saída (1-Clique)</span>
                         </button>
                       ) : (
-                        /* PRESTADOR FORA: REGISTRAR ENTRADA COM TEMPO LIMITE */
-                        <button
-                          type="button"
-                          onClick={() => abrirModalEntradaPara(item)}
-                          disabled={!permissoesOperador.darEntrada}
-                          className={`font-black px-3.5 py-2 rounded-xl text-xs uppercase flex items-center gap-1.5 transition shadow-sm active:scale-95 cursor-pointer disabled:bg-slate-800 disabled:text-slate-500 ${
-                            infoValidade.expirou
-                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-                              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
-                          }`}
-                        >
-                          <LogIn className="w-3.5 h-3.5" />
-                          <span>{infoValidade.expirou ? 'Entrada (Vencido)' : 'Registrar Entrada'}</span>
-                        </button>
+                        /* PRESTADOR FORA: 1-CLIQUE ENTRADA COM TEMPO E CRACHÁ */
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => darEntradaRapidaPrestador(item)}
+                            disabled={!permissoesOperador.darEntrada || loading}
+                            className={`font-black px-4 py-2.5 rounded-xl text-xs uppercase flex items-center gap-2 transition shadow-md active:scale-95 cursor-pointer disabled:bg-slate-800 disabled:text-slate-500 min-h-[44px] ${
+                              infoValidade.expirou
+                                ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
+                            }`}
+                            title="Registrar entrada com o tempo e crachá selecionados"
+                          >
+                            <LogIn className="w-4 h-4" />
+                            <span>{infoValidade.expirou ? 'Entrada (Vencido)' : 'Dar Entrada (1-Clique)'}</span>
+                          </button>
+
+                          {/* Botão de Modal Completo de Entrada (Se precisar de detalhes extras) */}
+                          <button
+                            type="button"
+                            onClick={() => abrirModalEntradaPara(item)}
+                            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 transition cursor-pointer min-h-[44px]"
+                            title="Abrir modal com observações personalizadas"
+                          >
+                            <Settings className="w-4 h-4" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
