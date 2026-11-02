@@ -35,9 +35,14 @@ function obterVersaoHorarioBrasil(data = new Date()) {
   return `${dia}${mes}${ano}${hora}${minuto}`;
 }
 
-let commitHash = 'prod';
+let commitHash = (
+  (process.env.CF_PAGES_COMMIT_SHA && process.env.CF_PAGES_COMMIT_SHA.slice(0, 7)) ||
+  (process.env.GITHUB_SHA && process.env.GITHUB_SHA.slice(0, 7)) ||
+  'prod'
+);
 try {
-  commitHash = execSync('git rev-parse --short HEAD', { timeout: 1500, stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
+  const gitHash = execSync('git rev-parse --short HEAD', { timeout: 1500, stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
+  if (gitHash) commitHash = gitHash;
 } catch {}
 
 const versaoCalculada = obterVersaoHorarioBrasil();

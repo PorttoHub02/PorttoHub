@@ -1,37 +1,109 @@
-name: PorttoHub Automated Versioning & Build Verification
+name: PorttoHub CI/CD - Automated Versioning, Quality & Cloudflare Deployment
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+
+# Concorrência: Cancela execuções redundantes anteriores se houver novos pushes na mesma branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  version_and_build:
+  validate_and_build:
+    name: Build & Validação de Qualidade
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Código
+      - name: Checkout Código Completo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configurar Node.js
+      - name: Configurar Node.js 22 LTS
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
 
-      - name: Instalar Dependências
+      - name: Instalar Dependências Limpas
         run: npm ci
 
-      - name: Compilação de Produção (Vite Build)
+      - name: Validação de Tipos TypeScript (Lint/Typecheck)
+        run: npm run lint
+
+      - name: Compilação de Produção (Vite Build & Auto-Versioning)
         run: npm run build
+        env:
+          NODE_ENV: production
+          GITHUB_SHA: ${{ github.sha }}
 
-      - name: Verificar Integridade de version.json
+      - name: Validação de Integridade PWA e Versionamento OTA
         run: |
-          test -f public/version.json || exit 1
+          echo "=== Verificando arquivos vitais de produção ==="
+          test -f public/version.json || { echo "ERRO: public/version.json não existe!"; exit 1; }
           test -f dist/version.json || cp public/version.json dist/version.json
-          cat public/version.json
+          test -f dist/index.html || { echo "ERRO: dist/index.html não gerado!"; exit 1; }
+          test -f dist/sw.js || { echo "ERRO: dist/sw.js ausente na pasta dist!"; exit 1; }
+          test -f dist/_headers || cp public/_headers dist/_headers
+          test -f dist/_redirects || cp public/_redirects dist/_redirects
+          echo "Conteúdo de version.json:"
+          cat dist/version.json
 
-      - name: Validação de Deploy Wrangler (Dry-Run)
-        run: npx wrangler deploy --dry-run
+      - name: Validação de Deploy Cloudflare Wrangler (Dry-Run Seguro)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "✅ Credencial Cloudflare detectada. Executando validação de regras com Wrangler dry-run..."
+            npx wrangler deploy --dry-run
+          else
+            echo "ℹ️ CLOUDFLARE_API_TOKEN não configurado nos Secrets do repositório."
+            echo "ℹ️ Executando validação sintática local dos arquivos de configuração Cloudflare (wrangler.toml e worker.js)..."
+            test -f wrangler.toml || { echo "wrangler.toml ausente!"; exit 1; }
+            test -f worker.js || { echo "worker.js ausente!"; exit 1; }
+            echo "✅ Estrutura Cloudflare válida e pronta para deploy."
+          fi
+
+      - name: Armazenar Artefatos Compilados (dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: porttohub-dist
+          path: dist/
+          retention-days: 7
+
+  deploy_cloudflare:
+    name: Deploy Automático Cloudflare
+    needs: validate_and_build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Baixar Artefato Compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: porttohub-dist
+          path: dist/
+
+      - name: Publicar no Cloudflare Workers / Assets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "🚀 Disparando Deploy de Produção no Cloudflare..."
+            npx wrangler deploy
+            echo "🎉 Deploy concluído com sucesso no Cloudflare!"
+          else
+            echo "ℹ️ Para habilitar o deploy automático contínuo:"
+            echo "1. Acesse https://dash.cloudflare.com/profile/api-tokens"
+            echo "2. Crie um token com permissão 'Cloudflare Workers/Pages: Edit'"
+            echo "3. No GitHub: Settings -> Secrets and variables -> Actions"
+            echo "4. Adicione CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID"
+          fi

@@ -55,6 +55,7 @@ import {
   History
 } from 'lucide-react';
 import ModalConfigHorariosObrasMudancas from '../components/ModalConfigHorariosObrasMudancas';
+import HistoricoAcessoPainelPrincipal from '../components/HistoricoAcessoPainelPrincipal';
 
 
 export type PerfilAcesso = 'autorizado' | 'prestador_unidade' | 'prestador_condominio';
@@ -2696,72 +2697,14 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       )}
 
       {/* ========================================================================= */}
-      {/* ABA 3: HISTÓRICO GERAL AUDITADO */}
+      {/* ABA 3: HISTÓRICO GERAL AUDITADO & ACESSOS RECENTES */}
       {/* ========================================================================= */}
       {abaAtiva === 'historico' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs text-slate-400 bg-slate-900 p-3 rounded-2xl border border-slate-800">
-            <span>Histórico de entradas e acessos registrados na guarita</span>
-            <span className="font-bold text-white">{historicoAcessos.length} registros</span>
-          </div>
-
-          {historicoAcessos.length === 0 ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-10 text-center space-y-2">
-              <Clock className="w-10 h-10 text-slate-600 mx-auto" />
-              <p className="text-sm font-bold text-slate-300">Nenhum acesso concluído no histórico recente</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {historicoAcessos.map((h: any) => {
-                const entradaFmt = h.data_hora_entrada ? new Date(h.data_hora_entrada).toLocaleString('pt-BR') : '--';
-                const saidaFmt = h.data_hora_saida ? new Date(h.data_hora_saida).toLocaleString('pt-BR') : null;
-                const ehVisitante = h.perfil_acesso === 'autorizado';
-
-                return (
-                  <div
-                    key={h.id}
-                    className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 text-xs text-slate-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div 
-                        onClick={() => (h.foto_rosto || h.foto_url) && setModalVisualizarFoto(h.foto_rosto || h.foto_url)}
-                        className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 overflow-hidden shrink-0 flex items-center justify-center text-slate-400 cursor-pointer"
-                      >
-                        {(h.foto_rosto || h.foto_url) ? (
-                          <img src={h.foto_rosto || h.foto_url} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <UserCheck className="w-5 h-5" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${perfilBadge(h.perfil_acesso)}`}>
-                            {perfilNome(h.perfil_acesso)}
-                          </span>
-                          <strong className="text-white text-sm truncate">{h.nome_completo}</strong>
-                          {h.cracha && <span className="font-mono text-amber-300">Crachá #{h.cracha}</span>}
-                        </div>
-                        <p className="text-slate-400 text-[11px] mt-0.5 truncate">
-                          Destino: <strong className="text-slate-200">{formatarIdentificacaoUnidade(h.unidade, h.bloco, condoConfig?.tipo_estrutura)}</strong> • {h.empresa || h.parentesco_vinculo || 'Visita'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-[11px] font-mono space-y-0.5 text-right self-end sm:self-center">
-                      <p className="text-emerald-400">Entrada: {entradaFmt} ({h.operador_entrada_nome || 'Op'})</p>
-                      {saidaFmt ? (
-                        <p className="text-red-400">Saída: {saidaFmt} ({h.operador_saida_nome || 'Op'})</p>
-                      ) : (
-                        <p className="text-purple-400 font-bold">
-                          {ehVisitante ? 'Visita Livre (Sem necessidade de saída)' : 'Em andamento'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="space-y-4">
+          <HistoricoAcessoPainelPrincipal
+            condominioId={idCondominio}
+            usuarioLogado={usuarioLogado}
+          />
         </div>
       )}
 

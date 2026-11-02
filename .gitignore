@@ -3,7 +3,7 @@ build/
 dist/
 coverage/
 .DS_Store
+bun.lock*
 *.log
 .env*
 !.env.example
-bun.lock
