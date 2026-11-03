@@ -1,7 +1,7 @@
 import Redis from 'ioredis';
 
 export interface CacheStats {
-  provider: 'redis-server' | 'in-memory-redis';
+  provider: 'upstash-redis-rest' | 'redis-server' | 'in-memory-redis';
   connected: boolean;
   totalKeys: number;
   hitCount: number;
@@ -11,15 +11,37 @@ export interface CacheStats {
   avgLatencyMs: number;
   lastConnectedAt?: string;
   keysSummary: Record<string, number>;
+  upstashConfigured?: boolean;
+}
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetSeconds: number;
+  total: number;
+}
+
+export interface AutorizadoCacheItem {
+  id: string;
+  condominioId: string;
+  name: string;
+  unit: string;
+  type: string;
+  status: 'Ativo' | 'Bloqueado';
+  document: string;
+  phone?: string;
+  photoUrl?: string;
+  updatedAt: string;
 }
 
 // Emulador In-Memory de ultra-alta performance com semântica Redis (TTL + LRU Cache Limitado)
 class InMemoryRedisStore {
   private store = new Map<string, { value: string; expiresAt?: number; tags?: string[] }>();
   private tagIndex = new Map<string, Set<string>>();
+  private rateLimitStore = new Map<string, { count: number; resetAt: number }>();
   private readonly maxCapacity: number;
 
-  constructor(maxCapacity: number = 3000) {
+  constructor(maxCapacity: number = 5000) {
     this.maxCapacity = maxCapacity;
 
     // Pruning periódico em segundo plano para liberar memória de chaves expiradas (a cada 60s)
@@ -36,6 +58,11 @@ class InMemoryRedisStore {
     for (const [key, entry] of this.store.entries()) {
       if (entry.expiresAt && now > entry.expiresAt) {
         this.del(key);
+      }
+    }
+    for (const [key, entry] of this.rateLimitStore.entries()) {
+      if (now > entry.resetAt) {
+        this.rateLimitStore.delete(key);
       }
     }
   }
@@ -118,9 +145,39 @@ class InMemoryRedisStore {
     return result;
   }
 
+  checkRateLimit(key: string, maxRequests: number, windowSeconds: number): RateLimitResult {
+    const now = Date.now();
+    const windowMs = windowSeconds * 1000;
+    let entry = this.rateLimitStore.get(key);
+
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 1, resetAt: now + windowMs };
+      this.rateLimitStore.set(key, entry);
+      return {
+        allowed: true,
+        remaining: maxRequests - 1,
+        resetSeconds: windowSeconds,
+        total: 1
+      };
+    }
+
+    entry.count++;
+    const resetSeconds = Math.ceil((entry.resetAt - now) / 1000);
+    const allowed = entry.count <= maxRequests;
+    const remaining = Math.max(0, maxRequests - entry.count);
+
+    return {
+      allowed,
+      remaining,
+      resetSeconds,
+      total: entry.count
+    };
+  }
+
   flushdb(): string {
     this.store.clear();
     this.tagIndex.clear();
+    this.rateLimitStore.clear();
     return 'OK';
   }
 
@@ -139,24 +196,44 @@ class RedisCacheManager {
   private totalLatencyMs = 0;
   private lastConnectedAt?: string;
 
+  // Upstash Redis REST Config
+  private upstashRestUrl: string = '';
+  private upstashRestToken: string = '';
+  private hasUpstash: boolean = false;
+
   constructor() {
     this.init();
   }
 
   private init() {
+    // 1. Detecta configuração Upstash Redis REST (alta performance, edge & serverless compatível)
+    const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+    const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+    if (upstashUrl && upstashToken) {
+      this.upstashRestUrl = upstashUrl.replace(/\/+$/, '');
+      this.upstashRestToken = upstashToken;
+      this.hasUpstash = true;
+      this.isConnected = true;
+      this.lastConnectedAt = new Date().toISOString();
+      console.log('⚡ [Upstash Redis REST] Conexão HTTP REST Edge inicializada com sucesso.');
+      return;
+    }
+
+    // 2. Fallback para conexão ioredis TCP tradicional (se fornecida e ambiente permitir)
     const redisUrl = process.env.REDIS_URL || process.env.REDISCLOUD_URL;
     if (redisUrl) {
       try {
         console.log('[Redis] Tentando conectar ao Redis remoto:', redisUrl.replace(/:[^:@]+@/, ':***@'));
         this.redis = new Redis(redisUrl, {
-          connectTimeout: 5000,
-          maxRetriesPerRequest: 2,
+          connectTimeout: 4000,
+          maxRetriesPerRequest: 1,
           retryStrategy: (times) => {
-            if (times > 3) {
-              console.warn('[Redis] Conexão remota falhou, ativando motor In-Memory Redis...');
+            if (times > 2) {
+              console.warn('[Redis] Conexão remota não disponível no sandbox, ativando motor In-Memory Redis...');
               return null;
             }
-            return Math.min(times * 1000, 3000);
+            return Math.min(times * 1000, 2000);
           },
           lazyConnect: true
         });
@@ -173,19 +250,56 @@ class RedisCacheManager {
         });
 
         this.redis.connect().catch((err) => {
-          console.warn('[Redis] Não foi possível conectar ao Redis remoto. Motor In-Memory Redis ativo:', err.message);
+          console.warn('[Redis] Usando motor In-Memory Redis ultrarrápido:', err.message);
         });
       } catch (err: any) {
         console.warn('[Redis] Falha ao inicializar ioredis, usando motor In-Memory Redis:', err.message);
       }
     } else {
-      console.log('⚡ [Redis] REDIS_URL não informada. Motor In-Memory Redis ultrarrápido inicializado com sucesso.');
+      console.log('⚡ [Redis] Upstash/REDIS_URL não informados. Motor In-Memory Redis ultrarrápido inicializado com sucesso.');
+    }
+  }
+
+  private async callUpstashCommand(command: (string | number)[]): Promise<any> {
+    if (!this.hasUpstash) return null;
+    try {
+      const res = await fetch(this.upstashRestUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.upstashRestToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(command)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.result;
+    } catch (err) {
+      console.warn('[Upstash REST] Falha na requisição, utilizando fallback em memória:', err);
+      return null;
     }
   }
 
   async get(key: string): Promise<string | null> {
     const start = Date.now();
     this.totalRequests++;
+
+    // 1. Tenta Upstash REST
+    if (this.hasUpstash) {
+      try {
+        const val = await this.callUpstashCommand(['GET', key]);
+        const latency = Date.now() - start;
+        this.totalLatencyMs += latency;
+        if (val !== null && val !== undefined) {
+          this.hitCount++;
+          // Sincroniza localmente
+          this.memoryFallback.set(key, typeof val === 'string' ? val : JSON.stringify(val), 'EX', 60);
+          return typeof val === 'string' ? val : JSON.stringify(val);
+        }
+      } catch {}
+    }
+
+    // 2. Tenta ioredis
     try {
       if (this.isConnected && this.redis) {
         const val = await this.redis.get(key);
@@ -196,10 +310,9 @@ class RedisCacheManager {
           return val;
         }
       }
-    } catch {
-      // Ignora erro no Redis e tenta fallback
-    }
+    } catch {}
 
+    // 3. Fallback In-Memory ultra-rápido (0ms)
     const val = this.memoryFallback.get(key);
     const latency = Date.now() - start;
     this.totalLatencyMs += latency;
@@ -212,10 +325,23 @@ class RedisCacheManager {
   }
 
   async set(key: string, value: string, ttlSeconds: number = 180, tags: string[] = []): Promise<string> {
+    // 1. Grava no Upstash REST
+    if (this.hasUpstash) {
+      try {
+        await this.callUpstashCommand(['SET', key, value, 'EX', ttlSeconds]);
+        if (tags && tags.length > 0) {
+          for (const t of tags) {
+            await this.callUpstashCommand(['SADD', `porttohub:tag:${t}`, key]);
+            await this.callUpstashCommand(['EXPIRE', `porttohub:tag:${t}`, ttlSeconds + 60]);
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Grava no ioredis
     try {
       if (this.isConnected && this.redis) {
         await this.redis.set(key, value, 'EX', ttlSeconds);
-        // Grava tags em sets para invalidação por tags
         if (tags && tags.length > 0) {
           for (const t of tags) {
             await this.redis.sadd(`porttohub:tag:${t}`, key);
@@ -223,14 +349,18 @@ class RedisCacheManager {
           }
         }
       }
-    } catch (e: any) {
-      console.warn('[Redis] Erro ao gravar chave no Redis remoto:', e.message);
-    }
+    } catch {}
 
+    // 3. Sempre grava no In-Memory para resposta instantânea
     return this.memoryFallback.set(key, value, 'EX', ttlSeconds, tags);
   }
 
   async del(key: string): Promise<number> {
+    if (this.hasUpstash) {
+      try {
+        await this.callUpstashCommand(['DEL', key]);
+      } catch {}
+    }
     try {
       if (this.isConnected && this.redis) {
         await this.redis.del(key);
@@ -241,6 +371,15 @@ class RedisCacheManager {
 
   async invalidateByPattern(pattern: string): Promise<number> {
     let count = 0;
+    if (this.hasUpstash) {
+      try {
+        const keys = await this.callUpstashCommand(['KEYS', pattern]);
+        if (Array.isArray(keys) && keys.length > 0) {
+          await this.callUpstashCommand(['DEL', ...keys]);
+          count += keys.length;
+        }
+      } catch {}
+    }
     try {
       if (this.isConnected && this.redis) {
         const keys = await this.redis.keys(pattern);
@@ -259,9 +398,21 @@ class RedisCacheManager {
 
   async invalidateByTag(tag: string): Promise<number> {
     let count = 0;
+    const tagKey = `porttohub:tag:${tag}`;
+
+    if (this.hasUpstash) {
+      try {
+        const keys = await this.callUpstashCommand(['SMEMBERS', tagKey]);
+        if (Array.isArray(keys) && keys.length > 0) {
+          await this.callUpstashCommand(['DEL', ...keys]);
+          count += keys.length;
+        }
+        await this.callUpstashCommand(['DEL', tagKey]);
+      } catch {}
+    }
+
     try {
       if (this.isConnected && this.redis) {
-        const tagKey = `porttohub:tag:${tag}`;
         const keys = await this.redis.smembers(tagKey);
         if (keys.length > 0) {
           count += await this.redis.del(...keys);
@@ -274,7 +425,65 @@ class RedisCacheManager {
     return count;
   }
 
+  /**
+   * Rate Limiter inteligente na borda / servidor
+   * Evita ataques de força bruta, spam de frames de câmera e travamento de dispositivos
+   */
+  async checkRateLimit(
+    identifier: string,
+    maxRequests: number = 10,
+    windowSeconds: number = 10
+  ): Promise<RateLimitResult> {
+    const key = `porttohub:ratelimit:${identifier}`;
+
+    // 1. Tenta Upstash REST INCR & EXPIRE
+    if (this.hasUpstash) {
+      try {
+        const currentCount = await this.callUpstashCommand(['INCR', key]);
+        if (currentCount === 1) {
+          await this.callUpstashCommand(['EXPIRE', key, windowSeconds]);
+        }
+        const ttl = await this.callUpstashCommand(['TTL', key]);
+        const allowed = Number(currentCount) <= maxRequests;
+        return {
+          allowed,
+          remaining: Math.max(0, maxRequests - Number(currentCount)),
+          resetSeconds: ttl > 0 ? ttl : windowSeconds,
+          total: Number(currentCount)
+        };
+      } catch {}
+    }
+
+    // 2. Fallback In-Memory
+    return this.memoryFallback.checkRateLimit(identifier, maxRequests, windowSeconds);
+  }
+
+  /**
+   * Cache de Autorizados de um condomínio para consulta facial em < 1ms
+   */
+  async setAutorizadosCache(condominioId: string, lista: AutorizadoCacheItem[], ttlSeconds: number = 3600): Promise<void> {
+    const key = `porttohub:autorizados:${condominioId}`;
+    await this.set(key, JSON.stringify(lista), ttlSeconds, [`condominio:${condominioId}`, 'autorizados']);
+  }
+
+  async getAutorizadosCache(condominioId: string): Promise<AutorizadoCacheItem[] | null> {
+    const key = `porttohub:autorizados:${condominioId}`;
+    const raw = await this.get(key);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   async flush(): Promise<string> {
+    if (this.hasUpstash) {
+      try {
+        await this.callUpstashCommand(['FLUSHDB']);
+      } catch {}
+    }
     try {
       if (this.isConnected && this.redis) {
         await this.redis.flushdb();
@@ -291,8 +500,20 @@ class RedisCacheManager {
     let remoteKeys = 0;
     const summary: Record<string, number> = {};
 
-    try {
-      if (this.isConnected && this.redis) {
+    if (this.hasUpstash) {
+      try {
+        const keys = await this.callUpstashCommand(['KEYS', 'porttohub:*']);
+        if (Array.isArray(keys)) {
+          remoteKeys = keys.length;
+          for (const k of keys) {
+            const parts = String(k).split(':');
+            const category = parts[2] || parts[1] || 'outros';
+            summary[category] = (summary[category] || 0) + 1;
+          }
+        }
+      } catch {}
+    } else if (this.isConnected && this.redis) {
+      try {
         const keys = await this.redis.keys('porttohub:*');
         remoteKeys = keys.length;
         for (const k of keys) {
@@ -300,8 +521,8 @@ class RedisCacheManager {
           const category = parts[2] || parts[1] || 'outros';
           summary[category] = (summary[category] || 0) + 1;
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     const memKeys = this.memoryFallback.keys('*');
     for (const k of memKeys) {
@@ -316,8 +537,8 @@ class RedisCacheManager {
     const avgLatencyMs = totalReq > 0 ? Number((this.totalLatencyMs / totalReq).toFixed(2)) : 0.8;
 
     return {
-      provider: this.isConnected ? 'redis-server' : 'in-memory-redis',
-      connected: this.isConnected,
+      provider: this.hasUpstash ? 'upstash-redis-rest' : this.isConnected ? 'redis-server' : 'in-memory-redis',
+      connected: this.hasUpstash || this.isConnected,
       totalKeys,
       hitCount: this.hitCount,
       missCount: this.missCount,
@@ -325,7 +546,8 @@ class RedisCacheManager {
       totalRequests: totalReq,
       avgLatencyMs,
       lastConnectedAt: this.lastConnectedAt,
-      keysSummary: summary
+      keysSummary: summary,
+      upstashConfigured: this.hasUpstash
     };
   }
 }

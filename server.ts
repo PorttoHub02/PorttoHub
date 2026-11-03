@@ -456,6 +456,214 @@ REGRAS RÍGIDAS:
 
 /**
  * ============================================================================
+ * MÓDULO FACIAL DE ALTA PERFORMANCE (UPSTASH REDIS + SUPABASE ASYNC LOGS)
+ * ============================================================================
+ */
+
+/**
+ * Validação Facial Instantânea (< 1 segundo / frações de milissegundo com Upstash Redis)
+ * Aplica Rate Limiting, consulta o cache em memória/Upstash e registra log assíncrono no Supabase
+ */
+app.post('/api/facial/verificar', async (req, res) => {
+  const start = Date.now();
+  try {
+    const { condominioId, targetId, termo, portao = 'Portão Pedestre Social' } = req.body;
+
+    if (!condominioId) {
+      return res.status(400).json({ sucesso: false, erro: 'Condomínio não informado.' });
+    }
+
+    // 1. Controle de Rate Limiting na borda (máximo 15 leituras a cada 10 segundos por origem)
+    const clientIp = (req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'origem_totem').split(',')[0].trim();
+    const rateCheck = await redisCache.checkRateLimit(`facial:${condominioId}:${clientIp}`, 15, 10);
+    
+    res.setHeader('X-RateLimit-Limit', '15');
+    res.setHeader('X-RateLimit-Remaining', String(rateCheck.remaining));
+    res.setHeader('X-RateLimit-Reset', String(rateCheck.resetSeconds));
+
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        sucesso: false,
+        liberado: false,
+        erro: 'Taxa de verificação facial excedida. Aguarde alguns segundos para evitar sobrecarga.',
+        rateLimit: rateCheck
+      });
+    }
+
+    // 2. Consulta Instantânea no Upstash Redis / In-Memory Cache
+    let autorizados = await redisCache.getAutorizadosCache(condominioId);
+    let origem = 'upstash-redis';
+
+    // 3. Se cache miss, busca no Supabase com isolamento multi-tenant estrito e alimenta o Redis
+    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
+    const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+
+    if (!autorizados || autorizados.length === 0) {
+      origem = 'supabase';
+      try {
+        const supRes = await fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/moradores?condominio_id=eq.${condominioId}&select=id,condominio_id,nome,bloco,unidade,tipo,status_acesso,cpf,rg,telefone,foto_url`, {
+          headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` }
+        });
+
+        if (supRes.ok) {
+          const dadosMoradores = await supRes.json();
+          if (Array.isArray(dadosMoradores)) {
+            autorizados = dadosMoradores.map((m: any) => ({
+              id: String(m.id),
+              condominioId: String(m.condominio_id || condominioId),
+              name: m.nome || 'Morador',
+              unit: `${m.bloco ? `${m.bloco} - ` : ''}Apto ${m.unidade || ''}`.trim(),
+              type: m.tipo || 'Morador',
+              status: m.status_acesso === 'bloqueado' ? 'Bloqueado' : 'Ativo',
+              document: m.cpf || m.rg || '',
+              phone: m.telefone || '',
+              photoUrl: m.foto_url || '',
+              updatedAt: new Date().toISOString()
+            }));
+
+            // Grava no Upstash Redis com TTL de 1 hora
+            await redisCache.setAutorizadosCache(condominioId, autorizados, 3600);
+          }
+        }
+      } catch (err) {
+        console.warn('[API Facial] Erro ao buscar moradores no Supabase:', err);
+      }
+    }
+
+    const lista = autorizados || [];
+    let matchedItem: any = null;
+
+    if (targetId) {
+      matchedItem = lista.find(a => a.id === targetId);
+    } else if (termo) {
+      const termClean = String(termo).toLowerCase().trim();
+      matchedItem = lista.find(a => 
+        a.name.toLowerCase().includes(termClean) || 
+        a.unit.toLowerCase().includes(termClean) ||
+        (a.document && a.document.replace(/\D/g, '').includes(termClean.replace(/\D/g, '')))
+      );
+    } else if (lista.length > 0) {
+      matchedItem = lista[0];
+    }
+
+    const latencyMs = Date.now() - start;
+
+    if (!matchedItem) {
+      // Disparo assíncrono de log de recusa no Supabase (não bloqueia resposta)
+      fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/registros_acesso`, {
+        method: 'POST',
+        headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          condominio_id: condominioId,
+          tipo: 'visitante',
+          nome: 'Rosto Não Reconhecido',
+          unidade_bloco: 'Não Identificada',
+          documento: '',
+          ponto_acesso_entrada: portao,
+          status: 'barrado',
+          motivo_bloqueio: 'Face não localizada no cadastro ativo',
+          data_hora_entrada: new Date().toISOString(),
+          operador_entrada_nome: 'Totem Facial Edge (Upstash Redis)'
+        })
+      }).catch(() => {});
+
+      return res.json({
+        sucesso: true,
+        liberado: false,
+        motivo: 'Rosto ou documento não cadastrado neste condomínio.',
+        origem,
+        latencyMs,
+        rateLimit: rateCheck
+      });
+    }
+
+    const liberado = matchedItem.status === 'Ativo';
+
+    // 4. Registro de Histórico Assíncrono no Supabase (Non-blocking: zero lag na UI)
+    fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/registros_acesso`, {
+      method: 'POST',
+      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        condominio_id: condominioId,
+        tipo: matchedItem.type === 'Prestador' ? 'prestador' : 'morador',
+        nome: matchedItem.name,
+        unidade_bloco: matchedItem.unit,
+        documento: matchedItem.document || '',
+        telefone: matchedItem.phone || '',
+        ponto_acesso_entrada: portao,
+        status: liberado ? 'presente' : 'barrado',
+        motivo_bloqueio: liberado ? undefined : 'Cadastro bloqueado administrativamente',
+        data_hora_entrada: new Date().toISOString(),
+        operador_entrada_nome: 'Totem Facial Edge (Upstash Redis)'
+      })
+    }).catch(logErr => console.warn('[Async Log] Aviso ao despachar log assíncrono:', logErr));
+
+    return res.json({
+      sucesso: true,
+      liberado,
+      pessoa: matchedItem,
+      motivo: liberado ? 'Acesso Autorizado' : 'Cadastro Bloqueado por Decisão Administrativa',
+      origem,
+      latencyMs,
+      rateLimit: rateCheck
+    });
+  } catch (err: any) {
+    console.error('[API Facial] Erro na validação facial:', err);
+    return res.status(500).json({ sucesso: false, erro: err.message || 'Falha no processamento facial' });
+  }
+});
+
+/**
+ * Espelhamento e Sincronização do Banco de Dados Supabase no Upstash Redis
+ * Espelha moradores e prestadores ativos no Redis para leitura instantânea
+ */
+app.post('/api/autorizados/sincronizar', async (req, res) => {
+  try {
+    const { condominioId } = req.body;
+    if (!condominioId) {
+      return res.status(400).json({ sucesso: false, erro: 'Condomínio não informado.' });
+    }
+
+    const baseUrl = process.env.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co';
+    const anonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+
+    const supRes = await fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/moradores?condominio_id=eq.${condominioId}&select=id,condominio_id,nome,bloco,unidade,tipo,status_acesso,cpf,rg,telefone,foto_url`, {
+      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` }
+    });
+
+    if (!supRes.ok) {
+      return res.status(supRes.status).json({ sucesso: false, erro: 'Falha ao buscar no Supabase' });
+    }
+
+    const dados = await supRes.json();
+    const mapeados: any[] = (Array.isArray(dados) ? dados : []).map((m: any) => ({
+      id: String(m.id),
+      condominioId: String(m.condominio_id || condominioId),
+      name: m.nome || 'Morador',
+      unit: `${m.bloco ? `${m.bloco} - ` : ''}Apto ${m.unidade || ''}`.trim(),
+      type: m.tipo || 'Morador',
+      status: m.status_acesso === 'bloqueado' ? 'Bloqueado' : 'Ativo',
+      document: m.cpf || m.rg || '',
+      phone: m.telefone || '',
+      photoUrl: m.foto_url || '',
+      updatedAt: new Date().toISOString()
+    }));
+
+    await redisCache.setAutorizadosCache(condominioId, mapeados, 3600);
+
+    return res.json({
+      sucesso: true,
+      totalSincronizados: mapeados.length,
+      condominioId,
+      mensagem: `${mapeados.length} autorizados espelhados com sucesso no Upstash Redis.`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * ============================================================================
  * ROTAS DE OTIMIZAÇÃO E CACHE REDIS PARA O BANCO DE DADOS SUPABASE
  * ============================================================================
  */

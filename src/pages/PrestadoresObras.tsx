@@ -56,6 +56,7 @@ import {
 } from 'lucide-react';
 import ModalConfigHorariosObrasMudancas from '../components/ModalConfigHorariosObrasMudancas';
 import HistoricoAcessoPainelPrincipal from '../components/HistoricoAcessoPainelPrincipal';
+import { invalidarCacheTabela } from '../services/redisCacheService';
 
 
 export type PerfilAcesso = 'autorizado' | 'prestador_unidade' | 'prestador_condominio';
@@ -823,6 +824,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
           ? `Visitante/Familiar ${nomeCompleto} autorizado! Entrada pode ser dada com 1 clique (sem necessidade de saída).`
           : `Prestador ${nomeCompleto} cadastrado com sucesso!`
       });
+      invalidarCacheTabela('prestadores', condoEfetivo).catch(() => {});
       fecharModalCadastro();
       await carregarTudo();
     } catch (err: any) {
@@ -875,6 +877,7 @@ export default function PrestadoresObras({ usuarioLogado }: PrestadoresObrasProp
       });
 
       setMensagem({ tipo: 'sucesso', texto: `Cadastro de ${nomeCompleto} atualizado com sucesso!` });
+      invalidarCacheTabela('prestadores', idCondominio).catch(() => {});
       fecharModalCadastro();
       await carregarTudo();
     } catch (err: any) {

@@ -277,6 +277,15 @@ export async function invalidarCacheTabela(table: string, condominioId?: string)
   } catch (err) {
     console.warn('[Cache Invalidate] Aviso ao invalidar no Redis:', err);
   }
+
+  // 3. Sincroniza cache de autorizados/moradores no Upstash Redis para reconhecimento facial instantâneo
+  if (table === 'moradores' || table === 'autorizados' || table === 'prestadores') {
+    fetch('/api/autorizados/sincronizar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ condominio_id: condominioId })
+    }).catch(() => {});
+  }
 }
 
 /**

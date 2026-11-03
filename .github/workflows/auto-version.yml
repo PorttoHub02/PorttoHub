@@ -16,6 +16,8 @@ jobs:
   validate_and_build:
     name: Build & Validação de Qualidade
     runs-on: ubuntu-latest
+    env:
+      NODE_OPTIONS: "--no-deprecation"
 
     steps:
       - name: Checkout Código Completo
@@ -27,10 +29,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
-      - name: Instalar Dependências Limpas
-        run: npm ci
+      - name: Instalar Dependências (Resiliente)
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "📦 package-lock.json detectado. Executando npm ci..."
+            npm ci || npm install
+          else
+            echo "⚠️ package-lock.json não encontrado. Executando npm install..."
+            npm install
+          fi
 
       - name: Validação de Tipos TypeScript (Lint/Typecheck)
         run: npm run lint
@@ -40,6 +48,11 @@ jobs:
         env:
           NODE_ENV: production
           GITHUB_SHA: ${{ github.sha }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://pkemipwowkcnstbazlma.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBrZW1pcHdvd2tjbnN0YmF6bG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MjI0MDQsImV4cCI6MjEwODk5ODQwNH0.oGV6ru4O-OgZ-LeSAtZp0kCZZqpK2BR49F1WCbO1yR0' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Validação de Integridade PWA e Versionamento OTA
         run: |

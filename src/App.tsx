@@ -63,6 +63,7 @@ import { registrarAtividade } from './services/auditoriaService';
 import { carregarNiveisAcesso, verificarPermissao } from './services/permissoesService';
 import { isUUID } from './services/condominioService';
 import { cachedQuery, aquecerCacheCondominio } from './services/redisCacheService';
+import { inicializarRealtimeGlobal } from './services/realtimeSyncEngine';
 import { 
   ShieldCheck, Sliders, Play, 
   Lock, 
@@ -152,9 +153,14 @@ export default function App() {
     const handleSchemaPendente = () => setSchemaPendente(true);
     window.addEventListener('infport_tema_alterado', handleTema);
     window.addEventListener('supabase:schema_pendente', handleSchemaPendente);
+
+    // Inicialização da Escuta Ativa em Tempo Real via Supabase Realtime WebSockets
+    const cleanupRealtime = inicializarRealtimeGlobal();
+
     return () => {
       window.removeEventListener('infport_tema_alterado', handleTema);
       window.removeEventListener('supabase:schema_pendente', handleSchemaPendente);
+      if (typeof cleanupRealtime === 'function') cleanupRealtime();
     };
   }, []);
 
