@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { RefreshCw, Sparkles, GitBranch } from 'lucide-react';
 import { usePwaUpdate } from '../hooks/usePwaUpdate';
-import { forcarAtualizacaoPwa } from '../services/pwaUpdateService';
-import { VERSAO_BUILD_ATUAL } from '../services/versaoService';
+import { 
+  VERSAO_BUILD_ATUAL, 
+  buscarVersaoMaisRecenteGitHubECloudflare, 
+  forcarAtualizacaoTotalCloudflareEApp 
+} from '../services/versaoService';
 
 interface BotaoAtualizarAppProps {
   className?: string;
@@ -23,42 +26,14 @@ export const BotaoAtualizarApp: React.FC<BotaoAtualizarAppProps> = ({
 
     if (atualizandoDireto) return;
     setAtualizandoDireto(true);
-    setStatusTexto('Buscando...');
+    setStatusTexto('Sincronizando...');
 
     try {
-      // 1. Tenta consultar o manifesto estático version.json gerado no build da Vercel
-      let temNova = false;
-      try {
-        const res = await fetch(`/version.json?_t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' }
-        });
-        if (res.ok) {
-          const info = await res.json();
-          if (info.versao && info.versao !== VERSAO_BUILD_ATUAL) {
-            temNova = true;
-          }
-        }
-      } catch (errJson) {
-        console.warn('[BotaoAtualizarApp] Falha ao ler version.json, tentando fallback:', errJson);
-      }
+      const info = await buscarVersaoMaisRecenteGitHubECloudflare();
 
-      // 2. Se não detectou por version.json, tenta /api/github-versao
-      if (!temNova) {
-        try {
-          const resGit = await fetch(`/api/github-versao?_t=${Date.now()}`);
-          if (resGit.ok) {
-            const infoGit = await resGit.json();
-            if (infoGit.sucesso && infoGit.versaoCalculada && infoGit.versaoCalculada !== VERSAO_BUILD_ATUAL) {
-              temNova = true;
-            }
-          }
-        } catch {}
-      }
-
-      if (temNova || novaVersaoDisponivel) {
-        setStatusTexto('Atualizando...');
-        await forcarAtualizacaoPwa();
+      if (info.temNovaVersao || novaVersaoDisponivel) {
+        setStatusTexto('Purgando Cloudflare...');
+        await forcarAtualizacaoTotalCloudflareEApp(info.versaoRemota);
       } else {
         // Tenta acionar o service worker update()
         if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -72,7 +47,7 @@ export const BotaoAtualizarApp: React.FC<BotaoAtualizarAppProps> = ({
         }, 1200);
       }
     } catch {
-      await forcarAtualizacaoPwa();
+      await forcarAtualizacaoTotalCloudflareEApp();
     }
   };
 

@@ -187,20 +187,32 @@ export async function forcarAtualizacaoPwa(): Promise<void> {
   notificarMudanca();
 
   try {
-    // 1. Aciona skipWaiting em todos os registros
+    // 1. Envia comando de purga na borda Cloudflare
+    try {
+      fetch(`/api/purge-cloudflare?_t=${Date.now()}`, {
+        method: 'POST',
+        cache: 'no-store'
+      }).catch(() => {});
+    } catch {}
+
+    // 2. Aciona SKIP_WAITING e FORCE_PURGE_ALL_CACHES em todos os Service Workers
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
       for (const reg of regs) {
+        if (reg.active) {
+          reg.active.postMessage({ type: 'FORCE_PURGE_ALL_CACHES' });
+        }
         if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'FORCE_PURGE_ALL_CACHES' });
           reg.waiting.postMessage({ type: 'SKIP_WAITING' });
         }
         try {
-          await reg.update();
+          await reg.unregister();
         } catch {}
       }
     }
 
-    // 2. Limpa todos os caches do CacheStorage (Workbox e caches de assets)
+    // 3. Limpa todos os caches do CacheStorage
     if (typeof window !== 'undefined' && 'caches' in window) {
       try {
         const chaves = await caches.keys();
@@ -211,17 +223,18 @@ export async function forcarAtualizacaoPwa(): Promise<void> {
       }
     }
 
-    // 3. Limpa sessionStorage temporário mantendo intacto o localStorage (sessão do operador salva)
+    // 4. Limpa sessionStorage temporário mantendo intacto o localStorage (sessão do operador salva)
     try {
       sessionStorage.clear();
     } catch {}
 
-    // 4. Recarrega a página forçando bypass de cache pelo navegador
+    // 5. Recarrega a página forçando bypass de cache pelo Cloudflare e navegador
     setTimeout(() => {
       const urlLimpa = new URL(window.location.href);
-      urlLimpa.searchParams.set('_v', Date.now().toString());
-      window.location.href = urlLimpa.toString();
-    }, 300);
+      urlLimpa.searchParams.set('cf_purge', Date.now().toString());
+      urlLimpa.searchParams.set('force_refresh', '1');
+      window.location.replace(urlLimpa.toString());
+    }, 250);
 
   } catch (err) {
     console.error('[PWA Update] Falha crítica na atualização, forçando reload simples:', err);

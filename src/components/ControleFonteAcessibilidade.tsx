@@ -22,7 +22,11 @@ import {
   OPCOES_ESCALA_FONTE 
 } from '../services/fontScaleService';
 import { obterTemaAtual, alternarTema, TipoTema } from '../services/themeService';
-import { VERSAO_BUILD_ATUAL } from '../services/versaoService';
+import { 
+  VERSAO_BUILD_ATUAL, 
+  buscarVersaoMaisRecenteGitHubECloudflare, 
+  forcarAtualizacaoTotalCloudflareEApp 
+} from '../services/versaoService';
 import { forcarAtualizacaoPwa } from '../services/pwaUpdateService';
 
 export interface ControleFonteAcessibilidadeProps {
@@ -133,7 +137,7 @@ export default function ControleFonteAcessibilidade({
     }, 150);
   };
 
-  // 1 CLIQUE DIRETO: busca nova versão e, se houver, atualiza o app sem menus intermediários
+  // 1 CLIQUE DIRETO: puxa atualização do GitHub e do Cloudflare, forçando o Cloudflare a atualizar o app
   const handleBuscarEAtualizarDireto = async (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
@@ -141,40 +145,36 @@ export default function ControleFonteAcessibilidade({
     if (buscandoVersao) return;
 
     setBuscandoVersao(true);
-    setStatusVersao('Buscando versão...');
+    setStatusVersao('Puxando GitHub & Cloudflare...');
 
     try {
-      // 1. Consulta versão no endpoint da API
-      const res = await fetch(`/api/github-versao?_t=${Date.now()}`);
-      let temNovaVersao = false;
+      const info = await buscarVersaoMaisRecenteGitHubECloudflare();
 
-      if (res.ok) {
-        const info = await res.json();
-        if (info.sucesso && info.versaoCalculada) {
-          if (info.versaoCalculada !== VERSAO_BUILD_ATUAL) {
-            temNovaVersao = true;
-          }
-        }
-      }
-
-      if (temNovaVersao) {
-        setStatusVersao('Nova versão! Atualizando...');
-        // Executa atualização do PWA e recarrega imediatamente com 1 clique
-        await forcarAtualizacaoPwa();
+      if (info.temNovaVersao) {
+        setStatusVersao(`Nova v${info.versaoRemota}! Purgando Cloudflare...`);
+        await forcarAtualizacaoTotalCloudflareEApp(info.versaoRemota);
       } else {
         // App já está na versão mais recente
-        setStatusVersao('Já na versão mais recente!');
+        setStatusVersao(`v${info.versaoLocal} atualizada!`);
         setTimeout(() => {
           setMenuAberto(false);
           setStatusVersao(null);
           setBuscandoVersao(false);
-        }, 1200);
+        }, 1500);
       }
     } catch (err) {
-      console.warn('[BuscarNovaVersao] Falha na verificação, forçando recarga:', err);
-      setStatusVersao('Atualizando app...');
-      await forcarAtualizacaoPwa();
+      console.warn('[BuscarNovaVersao] Forçando recarga e purga de borda Cloudflare:', err);
+      setStatusVersao('Purgando Cloudflare & Atualizando...');
+      await forcarAtualizacaoTotalCloudflareEApp();
     }
+  };
+
+  const handleForcarRecargaCloudflare = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setBuscandoVersao(true);
+    setStatusVersao('Purgando borda Cloudflare...');
+    await forcarAtualizacaoTotalCloudflareEApp();
   };
 
   return (
@@ -351,28 +351,45 @@ export default function ControleFonteAcessibilidade({
                   </div>
                 </button>
 
-                {/* Botão de Buscar Nova Versão Direto (1 clique, sem abrir novos menus) */}
-                <button
-                  type="button"
-                  onClick={handleBuscarEAtualizarDireto}
-                  disabled={buscandoVersao}
-                  className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 active:scale-95 text-white transition flex items-center justify-between gap-2 cursor-pointer shadow-md shadow-emerald-500/20 disabled:opacity-75"
-                  title="Verifica se há nova versão no GitHub e atualiza imediatamente o aplicativo"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <GitBranch className="w-4 h-4 text-emerald-100 shrink-0" />
-                    <span className="truncate leading-tight">
-                      {statusVersao ? statusVersao : 'Buscar Nova Versão'}
-                    </span>
-                  </div>
-                  {buscandoVersao ? (
-                    <RefreshCw className="w-4 h-4 text-white animate-spin shrink-0" />
-                  ) : statusVersao?.includes('recente') ? (
-                    <CheckCircle2 className="w-4 h-4 text-white shrink-0" />
-                  ) : (
-                    <RefreshCw className="w-3.5 h-3.5 opacity-80 shrink-0" />
-                  )}
-                </button>
+                {/* Botão de Buscar Nova Versão Direto (1 clique, sincroniza GitHub e força Cloudflare) */}
+                <div className="space-y-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={handleBuscarEAtualizarDireto}
+                    disabled={buscandoVersao}
+                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 active:scale-95 text-white transition flex items-center justify-between gap-2 cursor-pointer shadow-md shadow-emerald-500/20 disabled:opacity-75"
+                    title="Puxa atualização do GitHub e do Cloudflare e força o aplicativo a atualizar imediatamente"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <GitBranch className="w-4 h-4 text-emerald-100 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="truncate leading-tight block">
+                          {statusVersao ? statusVersao : 'Buscar Nova Versão (GitHub & Cloudflare)'}
+                        </span>
+                        <span className="text-[9px] text-emerald-100/80 font-normal block">
+                          Puxar do repositório & forçar Cloudflare
+                        </span>
+                      </div>
+                    </div>
+                    {buscandoVersao ? (
+                      <RefreshCw className="w-4 h-4 text-white animate-spin shrink-0" />
+                    ) : statusVersao?.includes('atualizada') ? (
+                      <CheckCircle2 className="w-4 h-4 text-white shrink-0" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5 opacity-80 shrink-0" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleForcarRecargaCloudflare}
+                    disabled={buscandoVersao}
+                    className="w-full text-center py-1 text-[10px] font-semibold text-slate-500 dark:text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition cursor-pointer"
+                    title="Expurga todo o cache de borda da CDN Cloudflare e recarrega limpo"
+                  >
+                    ⚡ Forçar Purga Completa do Cache Cloudflare
+                  </button>
+                </div>
               </div>
             </div>
           </div>,

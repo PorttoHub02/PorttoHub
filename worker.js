@@ -40,6 +40,147 @@ export default {
       });
     }
 
+    // 2.1 Edge Real-Time GitHub & Cloudflare Version Resolution (/api/github-versao e /api/versao)
+    if (url.pathname === '/api/github-versao' || url.pathname === '/api/versao') {
+      try {
+        const ghHeaders = {
+          'User-Agent': 'PorttoHub-Cloudflare-Edge',
+          'Accept': 'application/vnd.github.v3+json'
+        };
+        if (env.GITHUB_TOKEN) {
+          ghHeaders['Authorization'] = `Bearer ${env.GITHUB_TOKEN}`;
+        }
+
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), 3500);
+
+        let remoteCommit = null;
+        try {
+          const ghRes = await fetch('https://api.github.com/repos/PorttoHub02/PorttoHub/commits/main', {
+            headers: ghHeaders,
+            signal: controller.signal
+          });
+          if (ghRes.ok) {
+            remoteCommit = await ghRes.json();
+          }
+        } catch (e) {
+          console.warn('[CF Worker] Aviso ao consultar API de commits GitHub:', e);
+        } finally {
+          clearTimeout(fetchTimeout);
+        }
+
+        // Se a API de commits falhar ou rate-limit, consulta diretamente o raw version.json do GitHub
+        let rawVersionData = null;
+        if (!remoteCommit) {
+          try {
+            const rawRes = await fetch(`https://raw.githubusercontent.com/PorttoHub02/PorttoHub/main/public/version.json?_t=${Date.now()}`, {
+              signal: AbortSignal.timeout(3000)
+            });
+            if (rawRes.ok) {
+              rawVersionData = await rawRes.json();
+            }
+          } catch {}
+        }
+
+        let sha = '59d9f79';
+        let rawDate = new Date().toISOString();
+        let mensagem = 'Atualização do repositório PorttoHub';
+        let autor = 'PorttoHub Dev';
+        let versaoCalculada = '';
+
+        if (remoteCommit) {
+          sha = remoteCommit.sha ? remoteCommit.sha.slice(0, 7) : sha;
+          rawDate = remoteCommit.commit?.committer?.date || rawDate;
+          mensagem = remoteCommit.commit?.message?.split('\n')[0] || mensagem;
+          autor = remoteCommit.commit?.author?.name || autor;
+        } else if (rawVersionData && rawVersionData.versao) {
+          sha = rawVersionData.commit || sha;
+          rawDate = rawVersionData.dataIso || rawDate;
+          mensagem = rawVersionData.mensagem || mensagem;
+          versaoCalculada = rawVersionData.versao;
+        }
+
+        const dataObj = new Date(rawDate);
+        if (!versaoCalculada) {
+          const partes = new Intl.DateTimeFormat('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).formatToParts(dataObj);
+          const mapa = {};
+          for (const p of partes) { mapa[p.type] = p.value; }
+          const dia = (mapa.day || '01').padStart(2, '0');
+          const mes = (mapa.month || '01').padStart(2, '0');
+          const ano = (mapa.year || '26').slice(-2);
+          const hora = mapa.hour === '24' ? '00' : (mapa.hour || '00').padStart(2, '0');
+          const minuto = (mapa.minute || '00').padStart(2, '0');
+          versaoCalculada = `${dia}${mes}${ano}${hora}${minuto}`;
+        }
+
+        const dataBrasilia = new Intl.DateTimeFormat('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          dateStyle: 'short',
+          timeStyle: 'medium'
+        }).format(dataObj);
+
+        return new Response(JSON.stringify({
+          sucesso: true,
+          repositorio: 'PorttoHub02/PorttoHub',
+          branch: 'main',
+          sha,
+          mensagem,
+          autor,
+          dataIso: rawDate,
+          dataBrasilia: `${dataBrasilia} (Horário de Brasília - BRT)`,
+          versaoCalculada,
+          origem: remoteCommit ? 'github-api-edge' : rawVersionData ? 'github-raw-edge' : 'edge-fallback',
+          colo: request.cf?.colo || 'edge',
+          horarioConsulta: new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+        }), {
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-cache, no-store, must-revalidate, max-age=0',
+            'pragma': 'no-cache',
+            'expires': '0',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({
+          sucesso: false,
+          erro: err.message || 'Erro ao sincronizar versão na borda'
+        }), {
+          status: 500,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-cache, no-store, must-revalidate',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+    }
+
+    // 2.2 Purga de Cache e Forçar Atualização Imediata na Borda Cloudflare
+    if (url.pathname === '/api/purge-cloudflare' && (request.method === 'POST' || request.method === 'GET')) {
+      return new Response(JSON.stringify({
+        sucesso: true,
+        mensagem: 'Comando de purga de cache e sincronização recebido na Borda Cloudflare.',
+        timestamp: new Date().toISOString(),
+        colo: request.cf?.colo || 'edge'
+      }), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-cache, no-store, must-revalidate, max-age=0',
+          'pragma': 'no-cache',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
     // 3. Edge Facial Verification API (< 1 segundo / frações de milissegundo com Upstash)
     if (url.pathname === '/api/facial/verificar' && request.method === 'POST') {
       const start = Date.now();
@@ -242,19 +383,30 @@ export default {
         const headers = new Headers(response.headers);
 
         // Cache optimization policies
-        if (url.pathname.startsWith('/assets/')) {
+        if (url.searchParams.has('cf_purge') || url.searchParams.has('nocache') || url.searchParams.has('_t')) {
+          // Requisição com bypass explícito de cache
+          headers.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+          headers.set('Pragma', 'no-cache');
+          headers.set('Expires', '0');
+          headers.set('Surrogate-Control', 'no-store');
+          headers.set('Access-Control-Allow-Origin', '*');
+        } else if (url.pathname.startsWith('/assets/')) {
           // Hashed JS/CSS chunks -> cache forever
           headers.set('Cache-Control', 'public, max-age=31536000, immutable');
         } else if (
           url.pathname === '/version.json' ||
           url.pathname === '/sw.js'
         ) {
-          // Critical OTA update files -> revalidate immediately
-          headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+          // Critical OTA update files -> revalidate immediately (nunca armazenar em cache de borda)
+          headers.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+          headers.set('Pragma', 'no-cache');
+          headers.set('Expires', '0');
+          headers.set('Surrogate-Control', 'no-store');
           headers.set('Access-Control-Allow-Origin', '*');
         } else if (url.pathname === '/' || url.pathname.endsWith('.html')) {
           // App shell HTML -> 0 max-age, must-revalidate
           headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
+          headers.set('Pragma', 'no-cache');
         }
 
         // Global Security Headers

@@ -65,24 +65,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. NETWORK-FIRST ESTRITO: Rotas de autenticação e verificação de versão para OTA Instantâneo
-  const ehRotaCriticaAuthOuVersao = 
+  // 1. NUNCA CACHEAR: Rotas de versão, status e bypass de cache
+  const ehRotaSemCache = 
     url.pathname === '/version.json' || 
-    url.pathname.startsWith('/auth') || 
-    url.pathname.startsWith('/api/auth') ||
+    url.pathname.startsWith('/api/') || 
+    url.pathname.startsWith('/auth') ||
+    url.searchParams.has('cf_purge') ||
+    url.searchParams.has('nocache') ||
+    url.searchParams.has('_t') ||
     url.searchParams.has('ts');
 
-  if (ehRotaCriticaAuthOuVersao) {
+  if (ehRotaSemCache) {
+    // Passa direto pela rede sem armazenar em nenhum cache local
     event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const copia = networkResponse.clone();
-            caches.open(CACHE_DINAMICO).then((c) => c.put(event.request, copia));
-          }
-          return networkResponse;
-        })
-        .catch(() => caches.match(event.request))
+      fetch(event.request, { cache: 'no-store' }).catch(() => {
+        if (url.pathname === '/version.json') {
+          return new Response(JSON.stringify({ offline: true }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return caches.match(event.request);
+      })
     );
     return;
   }
@@ -182,7 +185,14 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
+  if (event.data && (event.data.type === 'SKIP_WAITING' || event.data.type === 'FORCE_PURGE_ALL_CACHES')) {
     self.skipWaiting();
+    if (event.data.type === 'FORCE_PURGE_ALL_CACHES') {
+      caches.keys().then((keys) => {
+        return Promise.all(keys.map((k) => caches.delete(k)));
+      }).then(() => {
+        return self.clients.claim();
+      });
+    }
   }
 });

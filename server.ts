@@ -37,10 +37,15 @@ const VERSAO_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
  * Retorna dados formatados no Horário Oficial do Brasil (Brasília / America/Sao_Paulo)
  * Implementada com cache em memória de 15 minutos e timeout curto para zero latência
  */
-app.get('/api/github-versao', async (_req, res) => {
+app.get(['/api/github-versao', '/api/versao'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   try {
     const agora = Date.now();
-    if (cachedVersaoData && (agora - cachedVersaoTimestamp < VERSAO_CACHE_TTL_MS)) {
+    const bypassCache = Boolean(req.query._t || req.query.nocache || req.query.cf_purge);
+    if (!bypassCache && cachedVersaoData && (agora - cachedVersaoTimestamp < VERSAO_CACHE_TTL_MS)) {
       return res.json(cachedVersaoData);
     }
 

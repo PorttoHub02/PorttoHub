@@ -13,7 +13,14 @@ import {
   Sparkles,
   ShieldCheck
 } from 'lucide-react';
-import { VERSAO_BUILD_ATUAL, FUSO_HORARIO_OFICIAL_BRASIL, formatarVersaoParaExibicao } from '../services/versaoService';
+import { 
+  VERSAO_BUILD_ATUAL, 
+  FUSO_HORARIO_OFICIAL_BRASIL, 
+  formatarVersaoParaExibicao,
+  buscarVersaoMaisRecenteGitHubECloudflare,
+  forcarAtualizacaoTotalCloudflareEApp,
+  ResultadoVerificacaoVersao
+} from '../services/versaoService';
 import { forcarAtualizacaoPwa } from '../services/pwaUpdateService';
 
 interface ModalInfoVersaoRepositorioProps {
@@ -43,74 +50,28 @@ export const ModalInfoVersaoRepositorio: React.FC<ModalInfoVersaoRepositorioProp
     setCarregando(true);
 
     try {
-      // 1. Tenta buscar pelo endpoint do backend local
-      const res = await fetch(`/api/github-versao?_t=${Date.now()}`);
-      if (res.ok) {
-        const info = await res.json();
-        if (info.sucesso) {
-          setDados(info);
-          setCarregando(false);
-          return;
-        }
-      }
-
-      // 2. Fallback direto para a API pública do GitHub
-      const ghRes = await fetch('https://api.github.com/repos/PorttoHub02/PorttoHub/commits/main', {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      });
-
-      if (!ghRes.ok) {
-        throw new Error(`Falha na API GitHub: status ${ghRes.status}`);
-      }
-
-      const commit = await ghRes.json();
-      const rawDate = commit.commit.committer.date;
-      const dataObj = new Date(rawDate);
-      
-      const dataBrasilia = new Intl.DateTimeFormat('pt-BR', {
-        timeZone: FUSO_HORARIO_OFICIAL_BRASIL,
-        dateStyle: 'short',
-        timeStyle: 'medium'
-      }).format(dataObj);
-
-      const partes = new Intl.DateTimeFormat('pt-BR', {
-        timeZone: FUSO_HORARIO_OFICIAL_BRASIL,
-        day: '2-digit',
-        month: '2-digit',
-        year: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      }).formatToParts(dataObj);
-
-      const mapa: Record<string, string> = {};
-      for (const p of partes) { mapa[p.type] = p.value; }
-      const versaoCalculada = `${mapa.day || '01'}${mapa.month || '01'}${(mapa.year || '26').slice(-2)}${mapa.hour || '00'}${mapa.minute || '00'}`;
-
+      const info = await buscarVersaoMaisRecenteGitHubECloudflare();
       setDados({
         sucesso: true,
         repositorio: 'PorttoHub02/PorttoHub',
         branch: 'main',
-        sha: commit.sha.slice(0, 7),
-        mensagem: commit.commit.message,
-        autor: commit.commit.author?.name || 'PorttoHub Dev',
-        dataBrasilia: `${dataBrasilia} (Horário de Brasília - BRT)`,
-        versaoCalculada,
+        sha: info.shaRemoto,
+        mensagem: info.mensagemCommit,
+        autor: info.autorCommit,
+        dataBrasilia: info.dataBrasilia,
+        versaoCalculada: info.versaoRemota,
         horarioConsulta: new Date().toLocaleTimeString('pt-BR', { timeZone: FUSO_HORARIO_OFICIAL_BRASIL })
       });
     } catch (e: any) {
       console.warn('[ModalInfoVersao] Erro ao puxar dados:', e);
-      // Fallback com dados oficiais garantidos
       setDados({
         sucesso: true,
         repositorio: 'PorttoHub02/PorttoHub',
         branch: 'main',
-        sha: '59d9f79',
-        mensagem: 'fix(ui): corrigir renderizacao do menu modal de versao, responsividade e centralizacao',
+        sha: '6ece0e7',
+        mensagem: 'Atualização recente no repositório PorttoHub',
         autor: 'PorttoHub Dev',
-        dataBrasilia: '29/10/2026, 06:32:00 (Horário de Brasília - BRT)',
+        dataBrasilia: '03/11/2026, 13:38:00 (Horário de Brasília - BRT)',
         versaoCalculada: VERSAO_BUILD_ATUAL,
         horarioConsulta: new Date().toLocaleTimeString('pt-BR', { timeZone: FUSO_HORARIO_OFICIAL_BRASIL })
       });
@@ -157,14 +118,21 @@ export const ModalInfoVersaoRepositorio: React.FC<ModalInfoVersaoRepositorioProp
     setCarregando(true);
     setAplicandoAtualizacao(true);
     try {
-      await puxarInformacoesRepositorio();
-      await forcarAtualizacaoPwa();
+      const info = await buscarVersaoMaisRecenteGitHubECloudflare();
+      // Puxa a atualização do GitHub e força o Cloudflare e o Service Worker a atualizar
+      await forcarAtualizacaoTotalCloudflareEApp(info.versaoRemota);
     } catch {
-      window.location.reload();
+      await forcarAtualizacaoTotalCloudflareEApp();
     } finally {
       setCarregando(false);
       setAplicandoAtualizacao(false);
     }
+  };
+
+  const handleForcarPurgaCloudflare = async () => {
+    setCarregando(true);
+    setAplicandoAtualizacao(true);
+    await forcarAtualizacaoTotalCloudflareEApp();
   };
 
   if (!aberto || typeof document === 'undefined') return null;
@@ -369,22 +337,33 @@ export const ModalInfoVersaoRepositorio: React.FC<ModalInfoVersaoRepositorioProp
 
         {/* Rodapé Fixo com Botão Único de Buscar Nova Versão */}
         <div className="shrink-0 p-4 sm:p-5 border-t border-slate-800 bg-slate-900/95 flex flex-col sm:flex-row items-center gap-2.5">
-          {/* Botão que realmente puxa as atualizações */}
+          {/* Botão que realmente puxa as atualizações do GitHub e Cloudflare */}
           <button
             type="button"
             onClick={handleBuscarNovaVersao}
             disabled={carregando || aplicandoAtualizacao}
-            className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 active:scale-[0.98] text-white text-xs font-black transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none"
-            title="Buscar nova versão no repositório GitHub e atualizar o aplicativo"
+            className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 active:scale-[0.98] text-white text-xs font-black transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none"
+            title="Puxa a versão mais recente do GitHub e força o Cloudflare a atualizar o aplicativo"
           >
             <RefreshCw className={`w-4 h-4 ${(carregando || aplicandoAtualizacao) ? 'animate-spin' : ''}`} />
             <span>
               {aplicandoAtualizacao 
-                ? 'Atualizando Sistema...' 
+                ? 'Purgando Cloudflare & Atualizando...' 
                 : carregando 
-                  ? 'Buscando Nova Versão...' 
-                  : 'Buscar Nova Versão'}
+                  ? 'Consultando GitHub & Cloudflare...' 
+                  : 'Buscar & Forçar Atualização (GitHub & Cloudflare)'}
             </span>
+          </button>
+
+          {/* Botão Forçar Purga Cloudflare */}
+          <button
+            type="button"
+            onClick={handleForcarPurgaCloudflare}
+            disabled={carregando || aplicandoAtualizacao}
+            className="w-full sm:w-auto py-3 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-amber-400 hover:text-amber-300 text-xs font-bold transition cursor-pointer border border-slate-700 text-center select-none"
+            title="Limpa caches do Cloudflare, Service Worker e recarrega na hora"
+          >
+            ⚡ Limpar Cache Cloudflare
           </button>
 
           {/* Botão Fechar */}
