@@ -6,7 +6,7 @@ import {
   VolumeX, ArrowRightLeft, Users, Home, Shield, Trash2, Check, Smartphone, 
   Radio, Clock, AlertCircle, Play, Square, Scan, Sliders, Download, Eye,
   Maximize2, Minimize2, QrCode, Copy, Share2, ExternalLink, Zap, Sparkles,
-  Wifi, WifiOff, PhoneCall
+  Wifi, WifiOff, PhoneCall, Menu, X, ChevronRight
 } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { 
@@ -359,6 +359,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
   // --- ABAS DE NAVEGAÇÃO ---
   const [activeTab, setActiveTab] = useState<'totem' | 'biometria' | 'moradores' | 'cadastramento' | 'logs' | 'dispositivos'>('totem');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
   // --- MODO TELA CHEIA IMERSIVA (TÓTEM / GUICHÊ) & CONTROLE DE ZOOM (0.5x vs 1.0x) ---
   const [isFullscreenTotem, setIsFullscreenTotem] = useState<boolean>(false);
@@ -1404,6 +1405,21 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
             <span className="hidden md:inline">Auto-Cadastro</span>
           </button>
 
+          {/* Mobile Menu Toggle Button */}
+          <button 
+            type="button"
+            onClick={() => setIsMobileMenuOpen(prev => !prev)}
+            className={`md:hidden p-2 sm:px-3 sm:py-2 rounded-xl border text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer shrink-0 ${
+              isMobileMenuOpen 
+                ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 ring-2 ring-cyan-500/30' 
+                : 'border-slate-800 bg-slate-950 hover:bg-slate-900 text-slate-300'
+            }`}
+            title="Abrir Menu Completo de Módulos"
+          >
+            {isMobileMenuOpen ? <X className="w-4 h-4 text-cyan-400" /> : <Menu className="w-4 h-4 text-cyan-400" />}
+            <span className="text-[11px] font-bold">Módulos</span>
+          </button>
+
           {/* Sound Toggle */}
           <button 
             onClick={() => setIsSoundEnabled(!isSoundEnabled)}
@@ -1416,15 +1432,149 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
       </header>
 
+      {/* HORIZONTAL SWIPEABLE SUB-NAV BAR PARA CELULARES (ALTO DESEMPENHO E ACESSO RÁPIDO) */}
+      <nav 
+        aria-label="Navegação Rápida de Módulos"
+        className={`md:hidden sticky top-[61px] z-20 bg-slate-950/95 backdrop-blur-md border-b border-slate-800/80 px-2.5 py-2 overflow-x-auto no-scrollbar scroll-smooth flex items-center gap-1.5 shrink-0 shadow-lg ${isFullscreenTotem ? 'hidden' : ''}`}
+      >
+        <button 
+          type="button"
+          onClick={() => setActiveTab('totem')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'totem' 
+              ? 'bg-gradient-to-r from-cyan-500/25 to-blue-500/25 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <Camera className="w-3.5 h-3.5" />
+          <span>Tótem</span>
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setActiveTab('biometria')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'biometria' 
+              ? 'bg-gradient-to-r from-emerald-500/25 to-teal-500/25 text-emerald-300 border border-emerald-500/50 shadow-sm shadow-emerald-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Biometria IA</span>
+          <span className="bg-emerald-500/30 text-emerald-300 text-[9px] px-1 rounded-full font-mono font-bold">95%</span>
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setActiveTab('moradores')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'moradores' 
+              ? 'bg-gradient-to-r from-cyan-500/25 to-blue-500/25 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Moradores</span>
+          {condoResidents.length > 0 && (
+            <span className="bg-slate-800 text-slate-300 text-[9px] px-1.5 py-0.2 rounded-full font-mono">
+              {condoResidents.length}
+            </span>
+          )}
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setActiveTab('cadastramento')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'cadastramento' 
+              ? 'bg-gradient-to-r from-cyan-500/25 to-blue-500/25 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <UserPlus className="w-3.5 h-3.5" />
+          <span>Cadastro</span>
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setActiveTab('logs')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'logs' 
+              ? 'bg-gradient-to-r from-cyan-500/25 to-blue-500/25 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span>Auditoria</span>
+          {condoLogs.length > 0 && (
+            <span className="bg-slate-800 text-slate-300 text-[9px] px-1.5 py-0.2 rounded-full font-mono">
+              {condoLogs.length}
+            </span>
+          )}
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setActiveTab('dispositivos')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all duration-150 cursor-pointer shrink-0 ${
+            activeTab === 'dispositivos' 
+              ? 'bg-gradient-to-r from-cyan-500/25 to-blue-500/25 text-cyan-300 border border-cyan-500/50 shadow-sm shadow-cyan-950/50' 
+              : 'bg-slate-900/80 text-slate-400 border border-slate-800/80 hover:text-slate-200'
+          }`}
+        >
+          <Cpu className="w-3.5 h-3.5" />
+          <span>Relé</span>
+        </button>
+      </nav>
+
       {/* SYSTEM BODY CONTAINER */}
       <div className="flex-1 flex flex-col md:flex-row pb-20 md:pb-0">
         
-        {/* DESKTOP SIDEBAR NAVIGATION (HIDDEN ON MOBILE) */}
-        <aside className={`hidden md:flex w-64 border-r border-slate-800 bg-slate-900/40 p-4 flex-col space-y-1 ${isFullscreenTotem ? 'hidden' : ''}`}>
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 pb-2">Módulos de Controle</div>
+        {/* BACKDROP OVERLAY PARA CELULAR */}
+        {isMobileMenuOpen && (
+          <div 
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm md:hidden animate-in fade-in duration-200"
+          />
+        )}
+
+        {/* SIDEBAR NAVIGATION - DESKTOP E DRAWER MOBILE */}
+        <aside className={`
+          ${isFullscreenTotem ? 'hidden' : ''}
+          ${isMobileMenuOpen 
+            ? 'fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-slate-900/98 border-r border-slate-800 p-4 flex flex-col space-y-1 shadow-2xl backdrop-blur-xl animate-in slide-in-from-left duration-200 overflow-y-auto' 
+            : 'hidden md:flex md:w-64 border-r border-slate-800 bg-slate-900/40 p-4 flex-col space-y-1 shrink-0'
+          }
+        `}>
+          {/* TOPO DO MENU NO CELULAR (COM BOTÃO FECHAR) */}
+          <div className="md:hidden flex items-center justify-between pb-3 mb-2 border-b border-slate-800">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
+                <Scan className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Módulos de Controle</h3>
+                <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{currentCondo.name}</p>
+              </div>
+            </div>
+            <button 
+              type="button"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+              title="Fechar Menu"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="hidden md:block text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 pb-2">Módulos de Controle</div>
 
           <button 
-            onClick={() => setActiveTab('totem')}
+            type="button"
+            onClick={() => {
+              setActiveTab('totem');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'totem' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <Camera className="w-4 h-4" />
@@ -1432,7 +1582,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
-            onClick={() => setActiveTab('biometria')}
+            type="button"
+            onClick={() => {
+              setActiveTab('biometria');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'biometria' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -1441,7 +1595,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
-            onClick={() => setActiveTab('moradores')}
+            type="button"
+            onClick={() => {
+              setActiveTab('moradores');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'moradores' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <Users className="w-4 h-4" />
@@ -1450,7 +1608,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
-            onClick={() => setActiveTab('cadastramento')}
+            type="button"
+            onClick={() => {
+              setActiveTab('cadastramento');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'cadastramento' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <UserPlus className="w-4 h-4" />
@@ -1458,7 +1620,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
-            onClick={() => setActiveTab('logs')}
+            type="button"
+            onClick={() => {
+              setActiveTab('logs');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'logs' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <Clock className="w-4 h-4" />
@@ -1467,7 +1633,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
-            onClick={() => setActiveTab('dispositivos')}
+            type="button"
+            onClick={() => {
+              setActiveTab('dispositivos');
+              setIsMobileMenuOpen(false);
+            }}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'dispositivos' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
             <Cpu className="w-4 h-4" />
@@ -1504,7 +1674,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         </aside>
 
         {/* MAIN VIEW AREA (RESPONSIVE NO HORIZONTAL SCROLL) */}
-        <main className={`flex-1 p-3 sm:p-5 lg:p-8 overflow-y-auto max-w-full ${isFullscreenTotem ? 'p-4 sm:p-6 h-screen max-h-screen' : 'max-h-[calc(100vh-65px)]'}`}>
+        <main className={`flex-1 p-3 sm:p-5 lg:p-8 overflow-y-auto max-w-full pb-28 md:pb-8 ${isFullscreenTotem ? 'p-4 sm:p-6 h-screen max-h-screen' : 'max-h-[calc(100vh-65px)]'}`}>
 
           {/* TAB 1: TOTEM VALIDADOR COM CÂMERA E RECONHECIMENTO EM TEMPO REAL */}
           {activeTab === 'totem' && (
@@ -2679,58 +2849,91 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
       </div>
 
       {/* MOBILE ADAPTIVE BOTTOM NAVIGATION BAR (FIXED ON SMARTPHONES / TABLETS) */}
-      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 px-2 py-2 flex items-center justify-around ${isFullscreenTotem ? 'hidden' : ''}`}>
+      <nav 
+        aria-label="Navegação Inferior Mobile"
+        className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/90 px-1.5 py-1.5 flex items-center justify-around shadow-2xl pb-[max(0.5rem,env(safe-area-inset-bottom))] ${isFullscreenTotem ? 'hidden' : ''}`}
+      >
         <button 
+          type="button"
           onClick={() => setActiveTab('totem')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'totem' ? 'text-cyan-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            activeTab === 'totem' ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <Camera className="w-5 h-5 mb-0.5" />
+          <Camera className="w-4 h-4 mb-0.5" />
           <span>Tótem</span>
         </button>
 
         <button 
+          type="button"
           onClick={() => setActiveTab('biometria')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'biometria' ? 'text-emerald-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            activeTab === 'biometria' ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <ShieldCheck className="w-5 h-5 mb-0.5 text-emerald-400" />
+          <ShieldCheck className="w-4 h-4 mb-0.5 text-emerald-400" />
           <span>Biometria</span>
         </button>
 
         <button 
+          type="button"
           onClick={() => setActiveTab('moradores')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer relative ${activeTab === 'moradores' ? 'text-cyan-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer relative ${
+            activeTab === 'moradores' ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <Users className="w-5 h-5 mb-0.5" />
+          <Users className="w-4 h-4 mb-0.5" />
           <span>Moradores</span>
           {condoResidents.length > 0 && (
-            <span className="absolute top-0 right-1.5 bg-cyan-500 text-slate-950 text-[9px] font-mono px-1 rounded-full">
+            <span className="absolute top-0 right-1 bg-cyan-500 text-slate-950 text-[9px] font-mono font-bold px-1 rounded-full">
               {condoResidents.length}
             </span>
           )}
         </button>
 
         <button 
+          type="button"
           onClick={() => setActiveTab('cadastramento')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'cadastramento' ? 'text-cyan-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            activeTab === 'cadastramento' ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <UserPlus className="w-5 h-5 mb-0.5" />
+          <UserPlus className="w-4 h-4 mb-0.5" />
           <span>Cadastro</span>
         </button>
 
         <button 
+          type="button"
           onClick={() => setActiveTab('logs')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'logs' ? 'text-cyan-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            activeTab === 'logs' ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <Clock className="w-5 h-5 mb-0.5" />
+          <Clock className="w-4 h-4 mb-0.5" />
           <span>Auditoria</span>
         </button>
 
         <button 
+          type="button"
           onClick={() => setActiveTab('dispositivos')}
-          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'dispositivos' ? 'text-cyan-400' : 'text-slate-400'}`}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            activeTab === 'dispositivos' ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-400 hover:text-slate-200'
+          }`}
         >
-          <Cpu className="w-5 h-5 mb-0.5" />
+          <Cpu className="w-4 h-4 mb-0.5" />
           <span>Relé</span>
+        </button>
+
+        <button 
+          type="button"
+          onClick={() => setIsMobileMenuOpen(prev => !prev)}
+          className={`flex flex-col items-center py-1 px-2 rounded-xl text-[10px] font-bold transition-all duration-150 cursor-pointer ${
+            isMobileMenuOpen ? 'text-cyan-300 bg-cyan-500/20' : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Menu Completo"
+        >
+          <Menu className="w-4 h-4 mb-0.5 text-cyan-400" />
+          <span>Menu</span>
         </button>
       </nav>
 
