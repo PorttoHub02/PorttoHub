@@ -681,6 +681,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
   }, [facingMode]);
 
   // --- CAMERA HANDLERS COM TRATAMENTO DE ABORTERROR ---
+  // --- CAMERA HANDLERS COM MULTI-FALLBACK RESILIENTE PARA CELULARES E TOTEMS ---
   const startCamera = useCallback(async () => {
     setCameraError(null);
     try {
@@ -695,22 +696,70 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         return;
       }
 
-      const constraints: MediaStreamConstraints = {
-        video: selectedDeviceId 
-          ? { deviceId: { exact: selectedDeviceId } }
-          : { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
-      };
+      let stream: MediaStream | null = null;
+      let lastErr: any = null;
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      // Nível 1: Tentativa com constraints ideais (dispositivo selecionado ou facingMode + resolução ideal)
+      try {
+        const constraints1: MediaStreamConstraints = {
+          video: selectedDeviceId && selectedDeviceId.trim() !== ''
+            ? { deviceId: { ideal: selectedDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: { ideal: facingMode || 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints1);
+      } catch (err1: any) {
+        lastErr = err1;
+        console.warn('[ControleAcesso] Nível 1 de câmera falhou, tentando fallback 2:', err1);
+      }
+
+      // Nível 2: Fallback flexível sem restrições de resolução (apenas facingMode)
+      if (!stream) {
+        try {
+          const constraints2: MediaStreamConstraints = {
+            video: { facingMode: facingMode || 'user' },
+            audio: false
+          };
+          stream = await navigator.mediaDevices.getUserMedia(constraints2);
+        } catch (err2: any) {
+          lastErr = err2;
+          console.warn('[ControleAcesso] Nível 2 de câmera falhou, tentando fallback 3:', err2);
+        }
+      }
+
+      // Nível 3: Fallback universal básico (qualquer câmera disponível no sistema)
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        } catch (err3: any) {
+          lastErr = err3;
+          console.error('[ControleAcesso] Nível 3 de câmera falhou:', err3);
+        }
+      }
+
+      if (!stream) {
+        throw lastErr || new Error('Nenhuma câmera disponível no dispositivo.');
+      }
+
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        // Tratamento seguro do AbortError em Promessas do play()
-        videoRef.current.play().catch((err: any) => {
+        const video = videoRef.current;
+        video.srcObject = stream;
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.muted = true;
+
+        try {
+          await video.play();
+        } catch (err: any) {
           if (err?.name !== 'AbortError') {
             console.warn('[ControleAcesso] Aviso no play() da câmera:', err);
           }
-        });
+        }
         setIsCameraActive(true);
+        setCameraError(null);
       }
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
@@ -730,14 +779,14 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     setIsCameraActive(false);
   }, []);
 
-  // Lista os dispositivos de câmera disponíveis
+  // Lista os dispositivos de câmera disponíveis de forma segura
   useEffect(() => {
     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
       navigator.mediaDevices.enumerateDevices()
         .then(devices => {
           const videoInputs = devices.filter(d => d.kind === 'videoinput');
           setCameraDevices(videoInputs);
-          if (videoInputs.length > 0 && !selectedDeviceId) {
+          if (videoInputs.length > 0 && !selectedDeviceId && videoInputs[0].deviceId && videoInputs[0].deviceId.trim() !== '') {
             setSelectedDeviceId(videoInputs[0].deviceId);
           }
         })
@@ -1800,6 +1849,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                     {/* HTML5 Video with AbortError resilience & 0.5x Zoom */}
                     <video 
                       ref={videoRef} 
+                      autoPlay
                       muted 
                       playsInline 
                       className={`w-full h-full ${
@@ -1821,29 +1871,119 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                       }}
                     />
 
+                    {/* Controles Rápidos Flutuantes sobre o Vídeo (Inverter Câmera / Ligar / Tela Cheia) */}
+                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto z-20">
+                      <div className="flex items-center space-x-1.5">
+                        <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg border backdrop-blur-md flex items-center gap-1.5 ${
+                          isCameraActive 
+                            ? 'bg-slate-950/80 border-emerald-500/40 text-emerald-400' 
+                            : 'bg-slate-950/80 border-amber-500/40 text-amber-400'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${isCameraActive ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`} />
+                          {isCameraActive ? 'LIVE STREAM' : 'OFFLINE'}
+                        </span>
+
+                        <span className="bg-slate-950/80 backdrop-blur-md text-[10px] font-mono text-slate-300 px-2 py-0.5 rounded-lg border border-slate-800">
+                          {facingMode === 'user' ? 'Frontal' : 'Traseira'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        {/* Botão para Inverter Câmera no Celular */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+                            setSelectedDeviceId('');
+                          }}
+                          className="p-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 backdrop-blur-md transition cursor-pointer active:scale-95 shadow-md"
+                          title="Inverter Câmera Frontal / Traseira"
+                        >
+                          <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+                        </button>
+
+                        {/* Botão Ligar/Desligar Câmera */}
+                        <button
+                          type="button"
+                          onClick={isCameraActive ? stopCamera : startCamera}
+                          className="p-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 backdrop-blur-md transition cursor-pointer active:scale-95 shadow-md"
+                          title={isCameraActive ? 'Desativar Câmera' : 'Ativar Câmera'}
+                        >
+                          <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                        </button>
+                      </div>
+                    </div>
+
                     {/* Picture-in-Picture (PiP) do Rosto Capturado no Momento */}
                     {lastCapturedPiP && (scanningStatus === 'matched' || scanningStatus === 'denied') && (
-                      <div className="absolute top-3 right-3 z-20 bg-slate-950/90 border-2 border-cyan-400/80 p-1 rounded-2xl shadow-2xl backdrop-blur-md animate-fade-in flex flex-col items-center">
+                      <div className="absolute top-12 right-2.5 z-20 bg-slate-950/90 border-2 border-cyan-400/80 p-1 rounded-2xl shadow-2xl backdrop-blur-md animate-fade-in flex flex-col items-center">
                         <img 
                           src={lastCapturedPiP} 
                           alt="Snapshot Capturado" 
-                          className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover"
+                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl object-cover"
                         />
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-cyan-300 pt-1">Foto Capturada</span>
+                        <span className="text-[8px] font-bold uppercase tracking-wider text-cyan-300 pt-0.5">Captura</span>
                       </div>
                     )}
 
-                    {/* Fallback Camera Error */}
-                    {cameraError && (
-                      <div className="absolute inset-0 bg-slate-950/90 p-6 flex flex-col items-center justify-center text-center space-y-3 z-20">
-                        <AlertTriangle className="w-10 h-10 text-amber-400" />
-                        <p className="text-xs text-slate-300 max-w-xs">{cameraError}</p>
+                    {/* Overlay de Câmera Desativada / Aguardando Inicialização */}
+                    {!isCameraActive && !cameraError && (
+                      <div className="absolute inset-0 bg-slate-950/95 p-6 flex flex-col items-center justify-center text-center space-y-3 z-20">
+                        <div className="w-14 h-14 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 flex items-center justify-center animate-pulse">
+                          <Camera className="w-7 h-7" />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-bold text-white">Câmera Pronta para Uso</h3>
+                          <p className="text-xs text-slate-400 max-w-xs">
+                            Toque no botão abaixo para inicializar o leitor facial no seu celular ou totem.
+                          </p>
+                        </div>
                         <button 
-                          onClick={startCamera}
-                          className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
+                          type="button"
+                          onClick={() => startCamera()}
+                          className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition shadow-lg shadow-cyan-950/50 flex items-center space-x-2 cursor-pointer active:scale-95"
                         >
-                          Tentar Novamente
+                          <Camera className="w-4 h-4" />
+                          <span>Ativar Câmera</span>
                         </button>
+                      </div>
+                    )}
+
+                    {/* Fallback Camera Error com Opções de Recuperação */}
+                    {cameraError && (
+                      <div className="absolute inset-0 bg-slate-950/95 p-6 flex flex-col items-center justify-center text-center space-y-3 z-20">
+                        <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+                          <AlertTriangle className="w-7 h-7" />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-bold text-white">Acesso à Câmera Necessário</h3>
+                          <p className="text-xs text-slate-300 max-w-xs">{cameraError}</p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSelectedDeviceId('');
+                              startCamera();
+                            }}
+                            className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 active:scale-95 shadow-md"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Tentar Câmera Padrão</span>
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+                              setSelectedDeviceId('');
+                              setTimeout(() => startCamera(), 100);
+                            }}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1.5 active:scale-95"
+                          >
+                            <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Inverter Câmera</span>
+                          </button>
+                        </div>
                       </div>
                     )}
 
