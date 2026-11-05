@@ -1,10 +1,10 @@
 {
-  "versao": "0511261301",
-  "commit": "4cce81e",
-  "mensagem": "fix(deploy): remove package-lock.json para evitar erro de npm ci na Cloudflare",
+  "versao": "0511261306",
+  "commit": "927c7f2",
+  "mensagem": "feat(biometria): implementar arquitetura de controle de acesso facial nivel militar com escore 0.95",
   "repositorio": "PorttoHub02/PorttoHub",
   "branch": "main",
-  "dataIso": "2026-11-05T16:01:35.863Z",
+  "dataIso": "2026-11-05T16:06:29.902Z",
   "fuso": "America/Sao_Paulo",
   "sucesso": true
 }
