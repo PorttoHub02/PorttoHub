@@ -16,7 +16,9 @@ process.env.VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://pkemip
 process.env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBrZW1pcHdvd2tjbnN0YmF6bG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0MjI0MDQsImV4cCI6MjEwODk5ODQwNH0.oGV6ru4O-OgZ-LeSAtZp0kCZZqpK2BR49F1WCbO1yR0';
 
 const app = express();
-const port = 3000;
+const portArgIndex = process.argv.indexOf('--port');
+const portArg = portArgIndex !== -1 ? parseInt(process.argv[portArgIndex + 1], 10) : null;
+const port = portArg || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 
 // Middleware de compressão Gzip/Deflate para acelerar tráfego e reduzir latência de rede em até 80%
 app.use(compression({
@@ -461,18 +463,195 @@ REGRAS RÍGIDAS:
 
 /**
  * ============================================================================
- * MÓDULO FACIAL DE ALTA PERFORMANCE (UPSTASH REDIS + SUPABASE ASYNC LOGS)
+ * MÓDULO ESPECIALISTA EM AUDITORIA E VERIFICAÇÃO BIOMÉTRICA FACIAL DE ALTA PRECISÃO
+ * (GEMINI 3.8 FLASH + UPSTASH REDIS + CRITÉRIOS ANATÔMICOS RIGOROSOS)
  * ============================================================================
  */
 
+const INSTRUCAO_SISTEMA_BIOMETRIA_FACIAL = `Você é um sistema especialista em auditoria e verificação biométrica facial de alta precisão para controle de acesso físico em condomínios. Sua única função é comparar duas imagens e determinar se a pessoa capturada na Imagem 2 é a mesma pessoa cadastrada na Imagem 1.
+
+DIRETRIZES DE PROCESSAMENTO E LEITURA:
+1. DESCONSIDERAÇÃO TOTAL DE ELEMENTOS DE FUNDO:
+   - Ignore completamente paredes, portas, pisos, iluminação ambiente, reflexos, sombras e qualquer objeto ao fundo.
+   - O fato de haver uma parede ou textura atrás do indivíduo NUNCA deve ser interpretado como um rosto ou estrutura humana.
+   - Localize e isola exclusivamente a região facial da Imagem 2. Se nenhum rosto humano claro for detectado na Imagem 2, descarte imediatamente a análise e defina "match": false.
+
+2. CRITÉRIOS DE COMPARAÇÃO FACIAL (ANÁLISE ANATÔMICA):
+   - Analise e compare estritamente a geometria e estrutura óssea facial entre a Imagem 1 (cadastro) e a Imagem 2 (câmera):
+     * Distância interpapilar (espaço entre os olhos) e formato dos olhos.
+     * Proporção, ponte e base do nariz.
+     * Projeção das maçãs do rosto (zigomático) e linha da mandíbula.
+     * Distância entre a base do nariz e o lábio superior, e do lábio inferior ao queixo.
+   - Desconsidere variações temporárias como corte de cabelo, expressão facial, uso de maquiagem, óculos de grau ou iluminação diferente.
+
+3. REGRA DE SEGURANÇA E ZERO TOLERÂNCIA A FALSOS POSITIVOS:
+   - Apenas confirme uma correspondência positiva ("match": true) se houver certeza absoluta de que se trata da mesma pessoa.
+   - Em caso de dúvida, ângulo muito inclinado, rosto parcialmente oculto, baixa resolução ou divergência na estrutura óssea, defina "match": false.
+   - NUNCA assuma a identidade de uma pessoa caso a foto seja incerta.
+
+4. FORMATO ESTRITO DE RESPOSTA (OBRIGATÓRIO):
+   - Sua saída deve ser EXCLUSIVAMENTE um objeto JSON válido, sem nenhum texto introdutório, explicações antes ou depois, e sem blocos de código markdown (não use \`\`\`json ... \`\`\`).
+   - O JSON deve conter exatamente as seguintes chaves:
+     {
+       "match": boolean, // true se for comprovadamente a mesma pessoa, false caso contrário
+       "confidence_score": number, // pontuação de 0.00 a 1.00 indicando a certeza da análise
+       "reason": "string" // justificativa sucinta e direta em português (ex: "Estrutura facial equivalente", "Nenhum rosto identificado na Imagem 2", "Divergência anatômica na estrutura nasal e mandíbula")
+     }`;
+
+async function extrairMimeEBase64(input: string): Promise<{ data: string; mimeType: string }> {
+  let mimeType = 'image/jpeg';
+  let data = '';
+
+  if (input.startsWith('http://') || input.startsWith('https://')) {
+    const fetchRes = await fetch(input, { signal: AbortSignal.timeout(6000) });
+    if (!fetchRes.ok) throw new Error(`Falha ao baixar imagem remota (HTTP ${fetchRes.status})`);
+    const buffer = await fetchRes.arrayBuffer();
+    data = Buffer.from(buffer).toString('base64');
+    mimeType = fetchRes.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
+  } else if (input.startsWith('data:')) {
+    const match = input.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      mimeType = match[1];
+      data = match[2];
+    } else {
+      data = input.replace(/^data:[^;]+;base64,/, '');
+    }
+  } else {
+    data = input.trim();
+  }
+
+  return { data, mimeType };
+}
+
+async function compararDuasImagensBiometria(imagemCadastro: string, imagemCaptura: string) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Chave GEMINI_API_KEY não configurada no servidor');
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build'
+      }
+    }
+  });
+
+  const img1 = await extrairMimeEBase64(imagemCadastro);
+  const img2 = await extrairMimeEBase64(imagemCaptura);
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              data: img1.data,
+              mimeType: img1.mimeType
+            }
+          },
+          {
+            text: 'Imagem 1: Foto cadastrada oficialmente no condomínio.'
+          },
+          {
+            inlineData: {
+              data: img2.data,
+              mimeType: img2.mimeType
+            }
+          },
+          {
+            text: 'Imagem 2: Foto capturada em tempo real pela câmera/totem de acesso.'
+          },
+          {
+            text: 'Execute a verificação biométrica facial com tolerância zero a falsos positivos e desconsideração total do fundo.'
+          }
+        ]
+      }
+    ],
+    config: {
+      systemInstruction: INSTRUCAO_SISTEMA_BIOMETRIA_FACIAL,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          match: {
+            type: Type.BOOLEAN,
+            description: 'true se for comprovadamente a mesma pessoa, false caso contrário'
+          },
+          confidence_score: {
+            type: Type.NUMBER,
+            description: 'pontuação de 0.00 a 1.00 indicando a certeza da análise'
+          },
+          reason: {
+            type: Type.STRING,
+            description: 'justificativa sucinta e direta em português'
+          }
+        },
+        required: ['match', 'confidence_score', 'reason']
+      }
+    }
+  });
+
+  const texto = response.text || '{}';
+  const resultado = JSON.parse(texto);
+  return {
+    match: Boolean(resultado.match),
+    confidence_score: typeof resultado.confidence_score === 'number' ? resultado.confidence_score : (resultado.match ? 0.95 : 0.05),
+    reason: resultado.reason || (resultado.match ? 'Estrutura facial equivalente' : 'Divergência anatômica detectada')
+  };
+}
+
+/**
+ * Endpoint de Auditoria e Verificação Biométrica Facial 1:1
+ */
+app.post('/api/facial/comparar-biometria', async (req, res) => {
+  try {
+    const { imagemCadastro, imagemCaptura, imagemCadastroBase64, imagemCapturaBase64 } = req.body;
+    const imgCad = imagemCadastro || imagemCadastroBase64;
+    const imgCap = imagemCaptura || imagemCapturaBase64;
+
+    if (!imgCad || !imgCap) {
+      return res.status(400).json({
+        match: false,
+        confidence_score: 0.0,
+        reason: 'Ambas as imagens (Imagem 1 - Cadastro e Imagem 2 - Câmera) são obrigatórias para comparação.'
+      });
+    }
+
+    const resultado = await compararDuasImagensBiometria(imgCad, imgCap);
+    return res.json(resultado);
+  } catch (err: any) {
+    console.error('[Biometria API] Erro na comparação biométrica:', err);
+    return res.status(500).json({
+      match: false,
+      confidence_score: 0.0,
+      reason: err.message || 'Erro interno ao processar biometria facial'
+    });
+  }
+});
+
 /**
  * Validação Facial Instantânea (< 1 segundo / frações de milissegundo com Upstash Redis)
- * Aplica Rate Limiting, consulta o cache em memória/Upstash e registra log assíncrono no Supabase
+ * Aplica Rate Limiting, consulta o cache em memória/Upstash, executa auditoria biométrica se imagem fornecida
+ * e registra log assíncrono no Supabase
  */
 app.post('/api/facial/verificar', async (req, res) => {
   const start = Date.now();
   try {
-    const { condominioId, targetId, termo, portao = 'Portão Pedestre Social' } = req.body;
+    const { 
+      condominioId, 
+      targetId, 
+      termo, 
+      portao = 'Portão Pedestre Social',
+      imagemCaptura,
+      imagemCapturaBase64,
+      snapshotPip
+    } = req.body;
+
+    const frameCamera = imagemCaptura || imagemCapturaBase64 || snapshotPip;
 
     if (!condominioId) {
       return res.status(400).json({ sucesso: false, erro: 'Condomínio não informado.' });
@@ -551,8 +730,6 @@ app.post('/api/facial/verificar', async (req, res) => {
       matchedItem = lista[0];
     }
 
-    const latencyMs = Date.now() - start;
-
     if (!matchedItem) {
       // Disparo assíncrono de log de recusa no Supabase (não bloqueia resposta)
       fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/registros_acesso`, {
@@ -577,12 +754,34 @@ app.post('/api/facial/verificar', async (req, res) => {
         liberado: false,
         motivo: 'Rosto ou documento não cadastrado neste condomínio.',
         origem,
-        latencyMs,
+        latencyMs: Date.now() - start,
         rateLimit: rateCheck
       });
     }
 
-    const liberado = matchedItem.status === 'Ativo';
+    // Auditoria Biométrica Facial com IA (se foto da câmera e cadastro estiverem disponíveis)
+    let biometriaResultado: { match: boolean; confidence_score: number; reason: string } | null = null;
+    let liberado = matchedItem.status === 'Ativo';
+    let motivo = liberado ? 'Acesso Autorizado' : 'Cadastro Bloqueado por Decisão Administrativa';
+
+    if (frameCamera && matchedItem.photoUrl && process.env.GEMINI_API_KEY) {
+      try {
+        biometriaResultado = await compararDuasImagensBiometria(matchedItem.photoUrl, frameCamera);
+        if (biometriaResultado.match && biometriaResultado.confidence_score >= 0.70) {
+          liberado = matchedItem.status === 'Ativo';
+          motivo = liberado 
+            ? `Acesso Autorizado (Biometria: ${(biometriaResultado.confidence_score * 100).toFixed(0)}% - ${biometriaResultado.reason})`
+            : 'Cadastro Bloqueado Administrativamente';
+        } else {
+          liberado = false;
+          motivo = `Acesso Barrado: ${biometriaResultado.reason} (Confiabilidade: ${(biometriaResultado.confidence_score * 100).toFixed(0)}%)`;
+        }
+      } catch (bioErr: any) {
+        console.warn('[API Facial] Fallback de biometria:', bioErr.message);
+      }
+    }
+
+    const latencyMs = Date.now() - start;
 
     // 4. Registro de Histórico Assíncrono no Supabase (Non-blocking: zero lag na UI)
     fetch(`${baseUrl.replace(/\/+$/, '')}/rest/v1/registros_acesso`, {
@@ -597,9 +796,9 @@ app.post('/api/facial/verificar', async (req, res) => {
         telefone: matchedItem.phone || '',
         ponto_acesso_entrada: portao,
         status: liberado ? 'presente' : 'barrado',
-        motivo_bloqueio: liberado ? undefined : 'Cadastro bloqueado administrativamente',
+        motivo_bloqueio: liberado ? undefined : motivo,
         data_hora_entrada: new Date().toISOString(),
-        operador_entrada_nome: 'Totem Facial Edge (Upstash Redis)'
+        operador_entrada_nome: biometriaResultado ? 'Auditor Biométrico Gemini 3.8 Flash' : 'Totem Facial Edge (Upstash Redis)'
       })
     }).catch(logErr => console.warn('[Async Log] Aviso ao despachar log assíncrono:', logErr));
 
@@ -607,7 +806,8 @@ app.post('/api/facial/verificar', async (req, res) => {
       sucesso: true,
       liberado,
       pessoa: matchedItem,
-      motivo: liberado ? 'Acesso Autorizado' : 'Cadastro Bloqueado por Decisão Administrativa',
+      motivo,
+      biometria: biometriaResultado,
       origem,
       latencyMs,
       rateLimit: rateCheck
@@ -1100,9 +1300,19 @@ async function start() {
     app.use(vite.middlewares);
   }
 
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[PorttoHub] Porta ${port} já está em uso.`);
+    } else {
+      console.error('[PorttoHub] Erro no servidor:', err);
+    }
+  });
+
   server.listen(port, '0.0.0.0', () => {
     console.log(`[PorttoHub] Servidor rodando em http://localhost:${port}`);
   });
 }
 
-start();
+start().catch(err => {
+  console.error('[PorttoHub] Falha crítica ao inicializar servidor:', err);
+});

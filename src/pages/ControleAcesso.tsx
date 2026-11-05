@@ -849,7 +849,15 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
     // 2. Redução Drástica de Payload: Comprime o frame via Canvas para JPEG otimizado (~45KB)
     let snapshotPip: string | null = null;
-    let metrics = {
+    let metrics: {
+      sizeKb: number;
+      isLightingGood: boolean;
+      avgBrightness: number;
+      latencyMs: number;
+      cacheOrigin: string;
+      aiScore?: number;
+      aiReason?: string;
+    } = {
       sizeKb: 45,
       isLightingGood: true,
       avgBrightness: 128,
@@ -959,8 +967,11 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
       setSelectedSubject(residentToMatch);
     }
 
-    // Consulta na API de Alta Performance (Upstash Redis < 1s)
+    // Consulta na API de Alta Performance (Upstash Redis + Auditoria Biométrica Facial Gemini 3.8 Flash)
     let apiSuccess = false;
+    let serverRefusalReason: string | null = null;
+    let isApproved = target === 'blocked' ? false : residentToMatch.status === 'Ativo';
+
     try {
       const apiRes = await fetch('/api/facial/verificar', {
         method: 'POST',
@@ -968,7 +979,8 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         body: JSON.stringify({
           condominioId: activeCondoId,
           targetId: residentToMatch.id,
-          portao: 'Portão Pedestre Social'
+          portao: 'Portão Pedestre Social',
+          imagemCapturaBase64: snapshotPip || undefined
         })
       });
 
@@ -980,6 +992,17 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         if (json.sucesso) {
           apiSuccess = true;
           metrics.cacheOrigin = json.origem === 'upstash-redis' ? 'Upstash Redis (1ms)' : 'Supabase Espelhado';
+          if (json.biometria) {
+            metrics.aiScore = Math.round((json.biometria.confidence_score || 0) * 100);
+            if (!json.biometria.match) {
+              isApproved = false;
+              serverRefusalReason = `Biometria Recusada: ${json.biometria.reason}`;
+            }
+          }
+          if (json.liberado === false) {
+            isApproved = false;
+            serverRefusalReason = json.motivo || serverRefusalReason || 'Acesso não liberado';
+          }
         }
       }
     } catch {
@@ -989,8 +1012,6 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     }
 
     setLastFrameMetrics(metrics);
-
-    const isApproved = target === 'blocked' ? false : residentToMatch.status === 'Ativo';
 
     if (isApproved) {
       setScanningStatus('matched');
@@ -1015,7 +1036,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         timestamp: horaAtual,
         dateStr: dataAtual,
         status: 'Liberado',
-        method: 'Reconhecimento Facial (Totem Upstash)',
+        method: 'Reconhecimento Facial (Totem Upstash + IA)',
         gate: 'Portão Pedestre Social',
         snapshotUrl: snapshotPip || residentToMatch.avatar || undefined
       };
@@ -1032,7 +1053,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           status: 'presente',
           ponto_acesso_entrada: 'Portão Pedestre Social',
           data_hora_entrada: new Date().toISOString(),
-          operador_entrada_nome: 'Totem Facial Edge (Upstash Redis)'
+          operador_entrada_nome: 'Totem Facial Edge (Upstash Redis + IA)'
         }])).catch(() => {});
       }
 
@@ -1049,7 +1070,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         name: residentToMatch.name,
         unit: residentToMatch.unit,
         type: residentToMatch.type,
-        reason: residentToMatch.status === 'Bloqueado' ? 'Cadastro Bloqueado por Decisão Administrativa' : 'Acesso Não Autorizado',
+        reason: serverRefusalReason || (residentToMatch.status === 'Bloqueado' ? 'Cadastro Bloqueado por Decisão Administrativa' : 'Acesso Não Autorizado'),
         avatar: residentToMatch.avatar,
         capturedPip: snapshotPip,
         timestamp: horaAtual,

@@ -1,10 +1,10 @@
 {
-  "versao": "0311261352",
-  "commit": "573bb3a",
-  "mensagem": "feat(ota): sincronizar busca de versao com github e forcar atualizacao na borda cloudflare e pwa",
+  "versao": "0411262141",
+  "commit": "b4f35fd",
+  "mensagem": "feat(biometria): modulo especialista em auditoria e verificacao biometrica facial anatomica de alta precisao",
   "repositorio": "PorttoHub02/PorttoHub",
   "branch": "main",
-  "dataIso": "2026-11-03T16:52:25.049Z",
+  "dataIso": "2026-11-05T00:41:36.992Z",
   "fuso": "America/Sao_Paulo",
   "sucesso": true
 }
