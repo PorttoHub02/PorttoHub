@@ -15,6 +15,7 @@ import {
 } from '../services/condominioService';
 import { salvarCacheLocal, obterCacheLocal } from '../services/offlineStorageService';
 import { compressVideoFrame, OptimizedFrameResult } from '../utils/cameraOptimization';
+import BotaoVerificacaoFacialBiometria from '../components/BotaoVerificacaoFacialBiometria';
 
 interface ControleAcessoProps {
   usuarioLogado?: any;
@@ -357,7 +358,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
   }, [accessLogs, activeCondoId]);
 
   // --- ABAS DE NAVEGAÇÃO ---
-  const [activeTab, setActiveTab] = useState<'totem' | 'moradores' | 'cadastramento' | 'logs' | 'dispositivos'>('totem');
+  const [activeTab, setActiveTab] = useState<'totem' | 'biometria' | 'moradores' | 'cadastramento' | 'logs' | 'dispositivos'>('totem');
 
   // --- MODO TELA CHEIA IMERSIVA (TÓTEM / GUICHÊ) & CONTROLE DE ZOOM (0.5x vs 1.0x) ---
   const [isFullscreenTotem, setIsFullscreenTotem] = useState<boolean>(false);
@@ -1421,6 +1422,15 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
           </button>
 
           <button 
+            onClick={() => setActiveTab('biometria')}
+            className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'biometria' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
+          >
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span>Validação Biométrica Facial</span>
+            <span className="ml-auto bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">IA</span>
+          </button>
+
+          <button 
             onClick={() => setActiveTab('moradores')}
             className={`flex items-center space-x-3 px-3.5 py-3 rounded-2xl text-sm font-semibold transition cursor-pointer ${activeTab === 'moradores' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-md' : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'}`}
           >
@@ -2103,6 +2113,96 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
             </div>
           )}
 
+          {/* TAB: VALIDAÇÃO BIOMÉTRICA FACIAL (IA GEMINI + AUDITORIA ANATÔMICA) */}
+          {activeTab === 'biometria' && (
+            <div className="space-y-6 max-w-4xl mx-auto">
+              <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2.5 bg-emerald-500/15 rounded-xl border border-emerald-500/30 text-emerald-400 shrink-0">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                      <span>Auditoria e Verificação Biométrica Facial</span>
+                      <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                        IA Gemini 3.8 Flash
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Análise geométrica e óssea facial com desconsideração total de fundo, iluminação e ruído ambiente. Tolerância zero a falsos positivos (exigência &ge; 90%).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <span className="text-[11px] font-mono bg-slate-950 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-xl">
+                    Portão: <strong className="text-emerald-400">Social Pedestre</strong>
+                  </span>
+                </div>
+              </div>
+
+              {/* Componente Dedicado de Validação */}
+              <BotaoVerificacaoFacialBiometria
+                condominioId={activeCondoId}
+                onAcessoLiberado={(resultado) => {
+                  playSoundAlert('success');
+                  dispararPulsoRelayHardware('pedestrian');
+                  const logItem: AccessLogItem = {
+                    id: `bio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    condoId: activeCondoId,
+                    residentName: 'Morador Autorizado (Biometria IA)',
+                    unit: 'Reconhecimento Facial',
+                    timestamp: new Date().toLocaleTimeString('pt-BR'),
+                    dateStr: new Date().toISOString().split('T')[0],
+                    status: 'Liberado',
+                    method: 'Biometria Facial Gemini (' + (resultado.confidence_score * 100).toFixed(1) + '%)',
+                    gate: 'Portão Pedestre Social',
+                    reason: resultado.reason
+                  };
+                  setAccessLogs(prev => [logItem, ...prev.slice(0, 99)]);
+                }}
+                onAcessoNegado={(resultado) => {
+                  playSoundAlert('denied');
+                  const logItem: AccessLogItem = {
+                    id: `bio_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    condoId: activeCondoId,
+                    residentName: 'Rosto Não Autorizado',
+                    unit: 'Tentativa de Acesso',
+                    timestamp: new Date().toLocaleTimeString('pt-BR'),
+                    dateStr: new Date().toISOString().split('T')[0],
+                    status: 'Negado',
+                    method: 'Biometria Facial Gemini',
+                    gate: 'Portão Pedestre Social',
+                    reason: `${resultado.reason} (${(resultado.confidence_score * 100).toFixed(1)}%)`
+                  };
+                  setAccessLogs(prev => [logItem, ...prev.slice(0, 99)]);
+                }}
+              />
+
+              {/* Informações Técnicas e Diretrizes */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 space-y-1.5">
+                  <span className="font-bold text-slate-200 block text-xs">1. Isolamento Anatômico</span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Paredes, texturas de fundo e reflexos são completamente ignorados. Apenas a região estrita da face humana é segmentada e analisada.
+                  </p>
+                </div>
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 space-y-1.5">
+                  <span className="font-bold text-slate-200 block text-xs">2. Geometria Óssea</span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Comparação de distância interpapilar, ponte nasal, projeção zigomática (maçãs do rosto) e arco mandibular entre o cadastro oficial e o leitor.
+                  </p>
+                </div>
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 space-y-1.5">
+                  <span className="font-bold text-slate-200 block text-xs">3. Tolerância Zero</span>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    O portão só é acionado com Match Positivo comprovado e score de certeza &ge; 0.90 (90%). Qualquer incerteza gera bloqueio imediato.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB 2: MORADORES & UNIDADES (FILTERED PER CONDOMINIUM - ZERO HORIZONTAL SCROLL) */}
           {activeTab === 'moradores' && (
             <div className="space-y-4 sm:space-y-6 max-w-6xl mx-auto">
@@ -2576,6 +2676,14 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
         >
           <Camera className="w-5 h-5 mb-0.5" />
           <span>Tótem</span>
+        </button>
+
+        <button 
+          onClick={() => setActiveTab('biometria')}
+          className={`flex flex-col items-center py-1 px-2.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${activeTab === 'biometria' ? 'text-emerald-400' : 'text-slate-400'}`}
+        >
+          <ShieldCheck className="w-5 h-5 mb-0.5 text-emerald-400" />
+          <span>Biometria</span>
         </button>
 
         <button 
