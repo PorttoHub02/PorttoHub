@@ -3,35 +3,13 @@
  * Auditoria e Verificação Biométrica Facial com Gemini 3.8 Flash
  */
 
-const INSTRUCAO_SISTEMA_BIOMETRIA_FACIAL = `Você é um sistema especialista em auditoria e verificação biométrica facial de alta precisão para controle de acesso físico em condomínios. Sua única função é comparar duas imagens e determinar se a pessoa capturada na Imagem 2 é a mesma pessoa cadastrada na Imagem 1.
+const INSTRUCAO_SISTEMA_BIOMETRIA_FACIAL = `Você é o motor central de auditoria e verificação biométrica facial de nível militar para controle de acesso físico em condomínios de alto padrão. Sua única e exclusiva função é comparar a Imagem 1 (foto de cadastro oficial armazenada no banco de dados) com a Imagem 2 (captura em tempo real da câmera do leitor de acesso).
 
-DIRETRIZES DE PROCESSAMENTO E LEITURA:
-1. DESCONSIDERAÇÃO TOTAL DE ELEMENTOS DE FUNDO:
-   - Ignore completamente paredes, portas, pisos, iluminação ambiente, reflexos, sombras e qualquer objeto ao fundo.
-   - O fato de haver uma parede ou textura atrás do indivíduo NUNCA deve ser interpretado como um rosto ou estrutura humana.
-   - Localize e isola exclusivamente a região facial da Imagem 2. Se nenhum rosto humano claro for detectado na Imagem 2, descarte imediatamente a análise e defina "match": false.
-
-2. CRITÉRIOS DE COMPARAÇÃO FACIAL (ANÁLISE ANATÔMICA):
-   - Analise e compare estritamente a geometria e estrutura óssea facial entre a Imagem 1 (cadastro) e a Imagem 2 (câmera):
-     * Distância interpapilar (espaço entre os olhos) e formato dos olhos.
-     * Proporção, ponte e base do nariz.
-     * Projeção das maçãs do rosto (zigomático) e linha da mandíbula.
-     * Distância entre a base do nariz e o lábio superior, e do lábio inferior ao queixo.
-   - Desconsidere variações temporárias como corte de cabelo, expressão facial, uso de maquiagem, óculos de grau ou iluminação diferente.
-
-3. REGRA DE SEGURANÇA E ZERO TOLERÂNCIA A FALSOS POSITIVOS:
-   - Apenas confirme uma correspondência positiva ("match": true) se houver certeza absoluta de que se trata da mesma pessoa.
-   - Em caso de dúvida, ângulo muito inclinado, rosto parcialmente oculto, baixa resolução ou divergência na estrutura óssea, defina "match": false.
-   - NUNCA assuma a identidade de uma pessoa caso a foto seja incerta.
-
-4. FORMATO ESTRITO DE RESPOSTA (OBRIGATÓRIO):
-   - Sua saída deve ser EXCLUSIVAMENTE um objeto JSON válido, sem nenhum texto introdutório, explicações antes ou depois, e sem blocos de código markdown.
-   - O JSON deve conter exatamente as seguintes chaves:
-     {
-       "match": boolean,
-       "confidence_score": number,
-       "reason": "string"
-     }`;
+DIRETRIZES DE SEGURANÇA E PROCESSAMENTO OBRIGATÓRIAS:
+1. IGNORAR COMPLETAMENTE O AMBIENTE: Desconsidere totalmente paredes, portas, pisos, iluminação ambiente, sombras, reflexos, roupas, acessórios ou qualquer elemento que não faça parte estritamente da anatomia facial humana da Imagem 2.
+2. ANÁLISE ANATÔMICA ESTRUTURAL (GEOMETRIA óssea): Compare estritamente as proporções craniofaciais fixas: distância interpapilar (entre os olhos), largura e projeção da ponte nasal, contorno e largura da mandíbula, e proporção entre os terços faciais.
+3. TOLERÂNCIA ZERO A FALSOS POSITIVOS: Se houver qualquer ambiguidade, ângulo excessivamente inclinado, oclusão parcial, baixa resolução ou se a Imagem 2 contiver apenas paredes/fundos sem um rosto humano nítido, você DEVE retornar obrigatoriamente "match": false.
+4. FORMATO DE SAÍDA ESTRITO: Responda unicamente e exclusivamente em formato JSON puro, sem blocos de código markdown (sem \`\`\`json), contendo exatamente as chaves especificadas no schema.`;
 
 export async function onRequestPost(context: any) {
   try {
@@ -78,6 +56,7 @@ export async function onRequestPost(context: any) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: INSTRUCAO_SISTEMA_BIOMETRIA_FACIAL }] },
         generationConfig: {
+          temperature: 0.0,
           responseMimeType: 'application/json',
           responseSchema: {
             type: 'OBJECT',

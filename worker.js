@@ -256,6 +256,7 @@ DIRETRIZES DE PROCESSAMENTO E LEITURA:
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemInstruction }] },
             generationConfig: {
+          temperature: 0.0,
               responseMimeType: 'application/json',
               responseSchema: {
                 type: 'OBJECT',

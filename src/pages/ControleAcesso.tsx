@@ -646,6 +646,16 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     }
   }, [hardwareRelay, activeCondoId, currentCondo.code]);
 
+  // Listener global para abertura de portão disparado pelo módulo de biometria facial
+  useEffect(() => {
+    const handler = (e: any) => {
+      const tipo = e?.detail?.tipo || 'pedestrian';
+      dispararPulsoRelayHardware(tipo);
+    };
+    window.addEventListener('porttohub:abrir-portao', handler);
+    return () => window.removeEventListener('porttohub:abrir-portao', handler);
+  }, [dispararPulsoRelayHardware]);
+
   // --- CAPTURA DE SNAPSHOT FRAME PARA PICTURE-IN-PICTURE (PiP) ---
   const captureCurrentFrameAsPiP = useCallback((): string | null => {
     if (!videoRef.current) return null;
@@ -2173,7 +2183,7 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                     status: 'Negado',
                     method: 'Biometria Facial Gemini',
                     gate: 'Portão Pedestre Social',
-                    reason: `${resultado.reason} (${(resultado.confidence_score * 100).toFixed(1)}%)`
+                    reason: resultado ? `${resultado.reason} (${(resultado.confidence_score * 100).toFixed(1)}%)` : 'Divergência biométrica facial'
                   };
                   setAccessLogs(prev => [logItem, ...prev.slice(0, 99)]);
                 }}
@@ -2194,9 +2204,9 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
                   </p>
                 </div>
                 <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-4 space-y-1.5">
-                  <span className="font-bold text-slate-200 block text-xs">3. Tolerância Zero</span>
+                  <span className="font-bold text-slate-200 block text-xs">3. Tolerância Zero (Nível Militar)</span>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    O portão só é acionado com Match Positivo comprovado e score de certeza &ge; 0.90 (90%). Qualquer incerteza gera bloqueio imediato.
+                    O portão só é acionado com Match Positivo comprovado e score de certeza &ge; 0.95 (95%). Qualquer incerteza gera bloqueio imediato.
                   </p>
                 </div>
               </div>

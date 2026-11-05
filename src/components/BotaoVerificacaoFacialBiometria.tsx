@@ -1,14 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, CheckCircle2, XCircle, RefreshCw, ShieldCheck, DoorOpen, User } from 'lucide-react';
+import { Camera, CheckCircle2, XCircle, RefreshCw, ShieldCheck, DoorOpen, User, Search } from 'lucide-react';
 import { supabase } from '../services/supabase';
-import { compararBiometriaFacial, ResultadoBiometriaFacial } from '../services/biometriaFacialService';
+import { 
+  validarAcessoFacial, 
+  iniciarLeitorFacial, 
+  ResultadoBiometriaFacial 
+} from '../services/biometriaFacialService';
 
 export interface BotaoVerificacaoFacialBiometriaProps {
   condominioId?: string;
   moradorId?: string;
-  onAcessoLiberado?: (resultado: ResultadoBiometriaFacial) => void;
-  onAcessoNegado?: (resultado: ResultadoBiometriaFacial) => void;
+  onAcessoLiberado?: (resultado: ResultadoBiometriaFacial, morador?: any) => void;
+  onAcessoNegado?: (resultado?: ResultadoBiometriaFacial) => void;
   className?: string;
+  embedded?: boolean;
 }
 
 export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBiometriaProps> = ({
@@ -16,79 +21,70 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
   moradorId: moradorIdProp,
   onAcessoLiberado,
   onAcessoNegado,
-  className = ''
+  className = '',
+  embedded = true
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
 
-  const [cameraAtiva, setCameraAtiva] = useState(false);
+  const [cpfOuIdentificador, setCpfOuIdentificador] = useState<string>('');
   const [analisando, setAnalisando] = useState(false);
-  const [statusTexto, setStatusTexto] = useState<string>('Câmera pronta para validação facial');
+  const [cameraAtiva, setCameraAtiva] = useState(false);
+  const [statusMensagem, setStatusMensagem] = useState<string>('Aguardando aproximação...');
+  const [statusClasse, setStatusClasse] = useState<string>('text-slate-300');
   const [statusTipo, setStatusTipo] = useState<'idle' | 'processando' | 'sucesso' | 'erro'>('idle');
   const [resultadoBio, setResultadoBio] = useState<ResultadoBiometriaFacial | null>(null);
 
   const [moradoresDisponiveis, setMoradoresDisponiveis] = useState<any[]>([]);
-  const [moradorSelecionadoId, setMoradorSelecionadoId] = useState<string>(moradorIdProp || '');
-  const [moradorSelecionadoNome, setMoradorSelecionadoNome] = useState<string>('');
+  const [filtroMoradores, setFiltroMoradores] = useState<string>('');
 
-  // 1. Função que ativa a webcam do dispositivo no elemento <video>
-  const ativarCamera = useCallback(async () => {
+  // 1. Inicializa o feed de vídeo da webcam
+  const ligarCamera = useCallback(async () => {
     try {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+      const sucesso = await iniciarLeitorFacial('camera-preview');
+      setCameraAtiva(sucesso);
+      if (sucesso) {
+        setStatusMensagem('Câmera ativa. Posicione o rosto no enquadramento e valide.');
+        setStatusClasse('text-slate-300');
+        setStatusTipo('idle');
+      } else {
+        setStatusMensagem('Não foi possível inicializar a câmera.');
+        setStatusClasse('text-red-400');
+        setStatusTipo('erro');
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user'
-        },
-        audio: false
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-      }
-      setCameraAtiva(true);
-      setStatusTexto('Câmera ativa. Posicione o rosto no enquadramento e clique em Validar.');
-      setStatusTipo('idle');
-    } catch (err: any) {
-      console.error('[Webcam] Erro ao acessar câmera:', err);
+    } catch {
       setCameraAtiva(false);
-      setStatusTexto('Permissão de câmera negada ou dispositivo indisponível.');
+      setStatusMensagem('Permissão de câmera negada ou dispositivo indisponível.');
+      setStatusClasse('text-red-400');
       setStatusTipo('erro');
     }
   }, []);
 
-  const desativarCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
+  const desligarCamera = useCallback(() => {
+    const video = document.getElementById('camera-preview') as HTMLVideoElement | null;
+    if (video && video.srcObject && video.srcObject instanceof MediaStream) {
+      video.srcObject.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
     }
     setCameraAtiva(false);
+    setStatusMensagem('Câmera em pausa.');
+    setStatusClasse('text-slate-400');
   }, []);
 
-  // Inicializa a câmera ao montar o componente
+  // Inicializa ao montar
   useEffect(() => {
-    ativarCamera();
+    ligarCamera();
     return () => {
-      desativarCamera();
+      desligarCamera();
     };
-  }, [ativarCamera, desativarCamera]);
+  }, [ligarCamera, desligarCamera]);
 
-  // Carrega moradores cadastrados no condomínio via Supabase para seleção ou validação
+  // Carrega lista de moradores cadastrados no Supabase para busca rápida
   useEffect(() => {
     async function carregarMoradores() {
       try {
         let query = supabase
           .from('moradores')
-          .select('id, nome, bloco, unidade, foto_url, status_acesso')
+          .select('id, nome, bloco, unidade, cpf, rg, foto_url, status_acesso')
           .order('nome');
 
         if (condominioId) {
@@ -98,275 +94,289 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
         const { data, error } = await query;
         if (!error && Array.isArray(data) && data.length > 0) {
           setMoradoresDisponiveis(data);
-          if (!moradorSelecionadoId) {
-            setMoradorSelecionadoId(data[0].id);
-            setMoradorSelecionadoNome(data[0].nome);
+          if (moradorIdProp) {
+            const m = data.find(item => item.id === moradorIdProp);
+            if (m) {
+              setCpfOuIdentificador(m.cpf || m.nome);
+            }
           }
         }
       } catch (err) {
-        console.warn('[Supabase] Falha ao listar moradores para biometria:', err);
+        console.warn('[Supabase] Falha ao listar moradores:', err);
       }
     }
 
     carregarMoradores();
-  }, [condominioId, moradorSelecionadoId]);
+  }, [condominioId, moradorIdProp]);
 
-  // Atualiza nome ao trocar seleção
-  useEffect(() => {
-    if (moradorSelecionadoId && moradoresDisponiveis.length > 0) {
-      const m = moradoresDisponiveis.find(item => item.id === moradorSelecionadoId);
-      if (m) setMoradorSelecionadoNome(m.nome);
-    }
-  }, [moradorSelecionadoId, moradoresDisponiveis]);
-
-  // Busca a foto oficial de cadastro no banco de dados Supabase
-  const buscarFotoOficialMorador = async (id: string): Promise<string> => {
-    // 1. Tenta pegar da lista já carregada em memória
-    const moradorLocal = moradoresDisponiveis.find(m => m.id === id);
-    if (moradorLocal && moradorLocal.foto_url) {
-      return moradorLocal.foto_url;
-    }
-
-    // 2. Consulta direta ao Supabase
-    const { data, error } = await supabase
-      .from('moradores')
-      .select('foto_url, nome')
-      .eq('id', id)
-      .single();
-
-    if (error || !data?.foto_url) {
-      throw new Error(`Morador selecionado (${data?.nome || id}) não possui foto oficial cadastrada no sistema.`);
-    }
-
-    return data.foto_url;
-  };
-
-  // 2 e 3. Função disparada pelo botão "Validar Acesso"
-  const executarReconhecimentoFacial = async () => {
+  // 2. Executa a validação facial de acordo com a arquitetura definida
+  const executarValidacao = async () => {
     if (analisando) return;
 
-    if (!videoRef.current || !cameraAtiva) {
-      await ativarCamera();
+    const termo = (cpfOuIdentificador || filtroMoradores).trim();
+    if (!termo) {
+      setStatusMensagem('Por favor, informe o CPF ou selecione o morador antes de validar.');
+      setStatusClasse('text-yellow-400 font-bold');
+      setStatusTipo('erro');
+      return;
+    }
+
+    if (!cameraAtiva) {
+      await ligarCamera();
     }
 
     setAnalisando(true);
-    setStatusTexto('Analisando biometria facial com IA Gemini 3.8 Flash...');
     setStatusTipo('processando');
     setResultadoBio(null);
 
-    try {
-      const video = videoRef.current;
-      if (!video || video.readyState < 2) {
-        throw new Error('Aguarde o vídeo da webcam inicializar completamente.');
+    const res = await validarAcessoFacial(
+      termo,
+      'camera-preview',
+      (mensagem, classeCss) => {
+        setStatusMensagem(mensagem);
+        setStatusClasse(classeCss);
+      },
+      {
+        condominioId,
+        onSucesso: (morador, resultado) => {
+          setStatusTipo('sucesso');
+          setResultadoBio(resultado);
+          if (onAcessoLiberado) {
+            onAcessoLiberado(resultado, morador);
+          }
+        },
+        onFalha: (_motivo, resultado) => {
+          setStatusTipo('erro');
+          if (resultado) setResultadoBio(resultado);
+          if (onAcessoNegado) {
+            onAcessoNegado(resultado);
+          }
+        }
       }
+    );
 
-      // Passo A: Capturar frame atual da webcam em Base64 através do Canvas
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Não foi possível inicializar o contexto 2D do Canvas.');
-
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64CameraFrame = canvas.toDataURL('image/jpeg', 0.85);
-
-      // Passo B: Obter a foto de cadastro oficial do morador no Supabase
-      if (!moradorSelecionadoId) {
-        throw new Error('Nenhum morador selecionado para comparação biométrica.');
-      }
-      const fotoCadastroOficial = await buscarFotoOficialMorador(moradorSelecionadoId);
-
-      // Passo C: Chamar a API de Biometria Facial do Gemini
-      const resposta: ResultadoBiometriaFacial = await compararBiometriaFacial({
-        imagemCadastro: fotoCadastroOficial,
-        imagemCaptura: base64CameraFrame
-      });
-
-      setResultadoBio(resposta);
-
-      // Passo D: Regra estrita de validação (match === true E confidence_score >= 0.90)
-      if (resposta.match && resposta.confidence_score >= 0.90) {
-        const certezaPercent = (resposta.confidence_score * 100).toFixed(1);
-        setStatusTexto(`Acesso Liberado! (${certezaPercent}% de certeza) — ${resposta.reason}`);
+    if (res) {
+      setResultadoBio(res);
+      if (res.match && res.confidence_score >= 0.95) {
         setStatusTipo('sucesso');
-
-        if (onAcessoLiberado) {
-          onAcessoLiberado(resposta);
-        }
       } else {
-        const certezaPercent = (resposta.confidence_score * 100).toFixed(1);
-        setStatusTexto(`Acesso Negado: ${resposta.reason} (Confiabilidade: ${certezaPercent}%)`);
         setStatusTipo('erro');
-
-        if (onAcessoNegado) {
-          onAcessoNegado(resposta);
-        }
       }
-    } catch (error: any) {
-      console.error('[Biometria] Erro na validação facial:', error);
-      setStatusTexto(error.message || 'Erro ao processar biometria. Tente novamente.');
-      setStatusTipo('erro');
-    } finally {
-      setAnalisando(false);
     }
+
+    setAnalisando(false);
   };
 
+  const moradoresFiltrados = moradoresDisponiveis.filter(m => {
+    if (!filtroMoradores) return true;
+    const f = filtroMoradores.toLowerCase();
+    return (
+      (m.nome && m.nome.toLowerCase().includes(f)) ||
+      (m.cpf && m.cpf.includes(f)) ||
+      (m.unidade && m.unidade.toLowerCase().includes(f))
+    );
+  }).slice(0, 6);
+
+  const containerClasses = embedded
+    ? `w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-5 sm:p-7 flex flex-col gap-5 text-white ${className}`
+    : `min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 ${className}`;
+
+  const innerCardClasses = embedded
+    ? 'w-full flex flex-col gap-5'
+    : 'w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 flex flex-col gap-6';
+
   return (
-    <div className={`flex flex-col items-center gap-4 p-5 sm:p-6 bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-md w-full mx-auto text-white ${className}`}>
-      
-      {/* Topo do Card de Validação */}
-      <div className="w-full flex items-center justify-between pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
-            <ShieldCheck className="w-4 h-4" />
+    <div className={containerClasses}>
+      <div className={innerCardClasses}>
+        
+        {/* Cabeçalho de Alta Visibilidade */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-lg sm:text-xl font-black tracking-tight text-emerald-400 flex items-center gap-2">
+                <span>PorttoHub Access</span>
+                <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                  NÍVEL MILITAR
+                </span>
+              </h1>
+              <p className="text-xs text-slate-400">Controle de Acesso Biométrico Facial 1:1</p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xs font-black uppercase tracking-wider text-slate-200">
-              Validação Biométrica Facial
-            </h3>
-            <span className="text-[10px] text-slate-400 font-mono">
-              IA Gemini 3.8 Flash + Tolerância Zero
-            </span>
-          </div>
-        </div>
 
-        <button
-          type="button"
-          onClick={cameraAtiva ? desativarCamera : ativarCamera}
-          className="text-[11px] font-semibold text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition cursor-pointer"
-          title={cameraAtiva ? 'Desligar webcam' : 'Ligar webcam'}
-        >
-          <Camera className="w-3.5 h-3.5" />
-          <span>{cameraAtiva ? 'Desligar' : 'Ligar'}</span>
-        </button>
-      </div>
-
-      {/* Seletor de Morador (caso não tenha sido fixado por prop) */}
-      {moradoresDisponiveis.length > 0 && (
-        <div className="w-full space-y-1">
-          <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <User className="w-3 h-3 text-cyan-400" />
-              Cadastro Oficial para Comparação:
-            </span>
-            <span className="text-[10px] text-cyan-400 font-mono">
-              {moradoresDisponiveis.length} cadastrados
-            </span>
-          </label>
-          <select
-            value={moradorSelecionadoId}
-            onChange={(e) => setMoradorSelecionadoId(e.target.value)}
-            disabled={analisando}
-            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 transition cursor-pointer"
+          <button
+            type="button"
+            onClick={cameraAtiva ? desligarCamera : ligarCamera}
+            className="text-xs font-semibold text-slate-400 hover:text-emerald-400 flex items-center gap-1.5 transition cursor-pointer"
+            title={cameraAtiva ? 'Desligar Câmera' : 'Ligar Câmera'}
           >
-            {moradoresDisponiveis.map(m => (
-              <option key={m.id} value={m.id}>
-                {m.nome} — {m.bloco ? `${m.bloco} - ` : ''}Apto {m.unidade || ''}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Frame de Vídeo da Webcam */}
-      <div className="relative w-full h-64 bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-inner group">
-        <video
-          id="webcam"
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-full h-full object-cover"
-        />
-
-        {/* Guia Visual Anatômica de Enquadramento */}
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
-          <div className={`w-36 h-48 rounded-full border-2 border-dashed transition-all duration-300 ${
-            statusTipo === 'sucesso' 
-              ? 'border-emerald-400 ring-4 ring-emerald-500/30 bg-emerald-500/10' 
-              : statusTipo === 'erro' 
-                ? 'border-red-400 ring-4 ring-red-500/30 bg-red-500/10' 
-                : statusTipo === 'processando'
-                  ? 'border-cyan-400 animate-pulse'
-                  : 'border-white/40'
-          }`} />
+            <Camera className="w-4 h-4" />
+            <span className="hidden sm:inline">{cameraAtiva ? 'Desligar' : 'Ligar'}</span>
+          </button>
         </div>
 
-        {/* Status Flutuante sobre o Vídeo */}
-        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
-          <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-emerald-400 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-            LIVE WEBCAM
-          </span>
-          {moradorSelecionadoNome && (
-            <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-slate-300 px-2 py-0.5 rounded-md border border-slate-700 truncate max-w-[150px]">
-              Alvo: {moradorSelecionadoNome}
+        {/* Input de Identificação Prévia (CPF ou Matrícula para busca 1:1 no Supabase) */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <label 
+              htmlFor="input-cpf"
+              className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5"
+            >
+              <User className="w-3.5 h-3.5 text-cyan-400" />
+              <span>CPF ou Matrícula do Morador</span>
+            </label>
+            <span className="text-[10px] text-slate-400 font-mono">
+              Verificação Estrita 1:1
             </span>
+          </div>
+
+          <div className="relative">
+            <input 
+              type="text" 
+              id="input-cpf" 
+              value={cpfOuIdentificador}
+              onChange={(e) => {
+                setCpfOuIdentificador(e.target.value);
+                setFiltroMoradores(e.target.value);
+              }}
+              placeholder="Digite o CPF ou selecione abaixo..." 
+              className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl focus:outline-none focus:border-emerald-500 text-white font-mono text-sm placeholder:text-slate-500 transition" 
+            />
+            {cpfOuIdentificador && (
+              <button 
+                type="button"
+                onClick={() => {
+                  setCpfOuIdentificador('');
+                  setFiltroMoradores('');
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Sugestões Rápidas de Moradores Cadastrados com Foto */}
+          {moradoresDisponiveis.length > 0 && !cpfOuIdentificador && (
+            <div className="space-y-1 pt-1">
+              <span className="text-[10px] text-slate-400 uppercase font-mono flex items-center gap-1">
+                <Search className="w-3 h-3 text-slate-400" />
+                Cadastros disponíveis para teste rápido:
+              </span>
+              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                {moradoresFiltrados.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setCpfOuIdentificador(m.cpf || m.nome);
+                      setFiltroMoradores('');
+                    }}
+                    className="text-[11px] bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-emerald-300 border border-slate-800 hover:border-emerald-500/50 rounded-lg px-2.5 py-1 transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span className="font-semibold truncate max-w-[120px]">{m.nome}</span>
+                    <span className="text-[9px] font-mono text-slate-400">
+                      {m.cpf ? `(${m.cpf.slice(0, 3)}...)` : `Apto ${m.unidade || ''}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </div>
-      </div>
 
-      {/* Botão de Disparo "Validar Acesso Facial" */}
-      <button 
-        id="btn-verificar" 
-        type="button"
-        onClick={executarReconhecimentoFacial}
-        disabled={analisando || !cameraAtiva}
-        className={`w-full py-3.5 px-4 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed select-none ${
-          statusTipo === 'sucesso'
-            ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
-            : statusTipo === 'erro'
-              ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30'
-              : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 text-white shadow-emerald-500/25'
-        }`}
-      >
-        {analisando ? (
-          <>
-            <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
-            <span>Processando Biometria com IA...</span>
-          </>
-        ) : statusTipo === 'sucesso' ? (
-          <>
-            <DoorOpen className="w-4 h-4 shrink-0" />
-            <span>Portão Liberado (Revalidar)</span>
-          </>
-        ) : (
-          <>
-            <ShieldCheck className="w-4 h-4 shrink-0" />
-            <span>Validar Acesso Facial</span>
-          </>
-        )}
-      </button>
+        {/* Feed da Câmera do Celular / Leitor de Acesso com Guia Anatômica Oval */}
+        <div className="relative w-full h-72 sm:h-80 bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-inner group">
+          <video 
+            id="camera-preview"
+            ref={videoRef}
+            autoPlay 
+            playsInline 
+            muted 
+            className="w-full h-full object-cover"
+          />
 
-      {/* Exibição Estruturada de Retorno e Status */}
-      <div 
-        id="status-retorno" 
-        className={`w-full text-xs font-bold text-center p-3 rounded-xl border transition-all ${
-          statusTipo === 'sucesso'
-            ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
-            : statusTipo === 'erro'
-              ? 'bg-red-950/60 border-red-500/50 text-red-300'
-              : statusTipo === 'processando'
-                ? 'bg-cyan-950/60 border-cyan-500/50 text-cyan-300 animate-pulse'
-                : 'bg-slate-950/80 border-slate-800 text-slate-300'
-        }`}
-      >
-        <div className="flex items-center justify-center gap-1.5">
-          {statusTipo === 'sucesso' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-          {statusTipo === 'erro' && <XCircle className="w-4 h-4 text-red-400 shrink-0" />}
-          {statusTipo === 'processando' && <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin shrink-0" />}
-          <span>{statusTexto}</span>
+          {/* Guia Visual Oval Centralizada */}
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
+            <div className={`w-44 sm:w-48 h-60 sm:h-64 border-2 border-dashed rounded-full transition-all duration-300 ${
+              statusTipo === 'sucesso' 
+                ? 'border-emerald-400 ring-4 ring-emerald-500/30 bg-emerald-500/10' 
+                : statusTipo === 'erro' 
+                  ? 'border-red-400 ring-4 ring-red-500/30 bg-red-500/10' 
+                  : statusTipo === 'processando'
+                    ? 'border-cyan-400 animate-pulse'
+                    : 'border-emerald-400/70'
+            }`} />
+          </div>
+
+          {/* Badge Flutuante de Status da Câmera */}
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+            <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-emerald-400 px-2.5 py-1 rounded-md border border-emerald-500/30 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              LEITOR ATIVO
+            </span>
+            <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
+              Score Exigido: &ge; 95%
+            </span>
+          </div>
         </div>
 
-        {resultadoBio && (
-          <div className="mt-2 pt-2 border-t border-white/10 text-[10px] font-mono flex items-center justify-around opacity-90">
-            <span>Match: <strong>{resultadoBio.match ? 'POSITIVO' : 'NEGATIVO'}</strong></span>
-            <span>Certeza: <strong>{(resultadoBio.confidence_score * 100).toFixed(1)}%</strong></span>
-            <span>Exigido: <strong>&ge; 90.0%</strong></span>
-          </div>
-        )}
-      </div>
+        {/* Botão de Ação Instantânea: Validar Acesso Facial */}
+        <button 
+          id="btn-verificar"
+          type="button"
+          onClick={executarValidacao}
+          disabled={analisando}
+          className={`w-full py-4 font-black rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 text-base uppercase tracking-wider cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed select-none ${
+            statusTipo === 'sucesso'
+              ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+              : statusTipo === 'erro'
+                ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+          }`}
+        >
+          {analisando ? (
+            <>
+              <RefreshCw className="w-5 h-5 animate-spin shrink-0" />
+              <span>Validando Biometria com IA...</span>
+            </>
+          ) : statusTipo === 'sucesso' ? (
+            <>
+              <DoorOpen className="w-5 h-5 shrink-0" />
+              <span>Portão Liberado (Revalidar)</span>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-5 h-5 shrink-0" />
+              <span>Validar Acesso Facial</span>
+            </>
+          )}
+        </button>
 
+        {/* Display de Status Dinâmico */}
+        <div 
+          id="status-display" 
+          className={`text-center text-sm font-medium min-h-[2.75rem] flex flex-col items-center justify-center bg-slate-950/80 rounded-xl p-3 border border-slate-800 transition-all ${statusClasse}`}
+        >
+          <div className="flex items-center justify-center gap-2">
+            {statusTipo === 'sucesso' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {statusTipo === 'erro' && <XCircle className="w-4 h-4 text-red-400 shrink-0" />}
+            {statusTipo === 'processando' && <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin shrink-0" />}
+            <span>{statusMensagem}</span>
+          </div>
+
+          {resultadoBio && (
+            <div className="mt-2 pt-2 border-t border-white/10 w-full text-[11px] font-mono flex items-center justify-around opacity-90 text-slate-300">
+              <span>Match: <strong className={resultadoBio.match ? 'text-emerald-400' : 'text-red-400'}>{resultadoBio.match ? 'POSITIVO' : 'NEGATIVO'}</strong></span>
+              <span>Certeza: <strong className="text-cyan-400">{(resultadoBio.confidence_score * 100).toFixed(1)}%</strong></span>
+              <span>Corte: <strong className="text-amber-400">&ge; 95.0%</strong></span>
+            </div>
+          )}
+        </div>
+
+      </div>
     </div>
   );
 };

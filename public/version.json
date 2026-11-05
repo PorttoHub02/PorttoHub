@@ -1,10 +1,10 @@
 {
-  "versao": "0411262211",
-  "commit": "aef9eaa",
-  "mensagem": "feat(biometria): integrar componente de validacao facial anatomica com webcam e gemini",
+  "versao": "0511261301",
+  "commit": "4cce81e",
+  "mensagem": "fix(deploy): remove package-lock.json para evitar erro de npm ci na Cloudflare",
   "repositorio": "PorttoHub02/PorttoHub",
   "branch": "main",
-  "dataIso": "2026-11-05T01:11:50.768Z",
+  "dataIso": "2026-11-05T16:01:35.863Z",
   "fuso": "America/Sao_Paulo",
   "sucesso": true
 }
