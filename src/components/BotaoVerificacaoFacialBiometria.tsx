@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, CheckCircle2, XCircle, RefreshCw, ShieldCheck, DoorOpen, User, Search } from 'lucide-react';
+import { Camera, CheckCircle2, XCircle, RefreshCw, ShieldCheck, DoorOpen, User, Search, Smartphone } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { 
   validarAcessoFacial, 
@@ -29,7 +29,8 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
   const [cpfOuIdentificador, setCpfOuIdentificador] = useState<string>('');
   const [analisando, setAnalisando] = useState(false);
   const [cameraAtiva, setCameraAtiva] = useState(false);
-  const [statusMensagem, setStatusMensagem] = useState<string>('Aguardando aproximação...');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const [statusMensagem, setStatusMensagem] = useState<string>('Posicione o rosto no visor e toque em Validar Acesso.');
   const [statusClasse, setStatusClasse] = useState<string>('text-slate-300');
   const [statusTipo, setStatusTipo] = useState<'idle' | 'processando' | 'sucesso' | 'erro'>('idle');
   const [resultadoBio, setResultadoBio] = useState<ResultadoBiometriaFacial | null>(null);
@@ -37,43 +38,54 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
   const [moradoresDisponiveis, setMoradoresDisponiveis] = useState<any[]>([]);
   const [filtroMoradores, setFiltroMoradores] = useState<string>('');
 
-  // 1. Inicializa o feed de vídeo da webcam
-  const ligarCamera = useCallback(async () => {
+  // 1. Inicializa o feed de vídeo da webcam de forma suave e resiliente
+  const ligarCamera = useCallback(async (modo?: 'user' | 'environment') => {
+    const targetMode = modo || facingMode;
     try {
-      const sucesso = await iniciarLeitorFacial('camera-preview');
+      const sucesso = await iniciarLeitorFacial('camera-preview', targetMode);
       setCameraAtiva(sucesso);
       if (sucesso) {
         setStatusMensagem('Câmera ativa. Posicione o rosto no enquadramento e valide.');
         setStatusClasse('text-slate-300');
         setStatusTipo('idle');
       } else {
-        setStatusMensagem('Não foi possível inicializar a câmera.');
-        setStatusClasse('text-red-400');
-        setStatusTipo('erro');
+        setStatusMensagem('Toque no botão "Ativar Câmera" para inicializar o leitor.');
+        setStatusClasse('text-slate-400');
+        setStatusTipo('idle');
       }
     } catch {
       setCameraAtiva(false);
-      setStatusMensagem('Permissão de câmera negada ou dispositivo indisponível.');
-      setStatusClasse('text-red-400');
-      setStatusTipo('erro');
+      setStatusMensagem('Toque no botão "Ativar Câmera" para permitir o acesso.');
+      setStatusClasse('text-slate-400');
+      setStatusTipo('idle');
     }
-  }, []);
+  }, [facingMode]);
+
+  const inverterCamera = useCallback(() => {
+    const novoModo = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(novoModo);
+    ligarCamera(novoModo);
+  }, [facingMode, ligarCamera]);
 
   const desligarCamera = useCallback(() => {
-    const video = document.getElementById('camera-preview') as HTMLVideoElement | null;
+    const video = (document.getElementById('camera-preview') || document.querySelector('video')) as HTMLVideoElement | null;
     if (video && video.srcObject && video.srcObject instanceof MediaStream) {
       video.srcObject.getTracks().forEach(track => track.stop());
       video.srcObject = null;
     }
     setCameraAtiva(false);
-    setStatusMensagem('Câmera em pausa.');
+    setStatusMensagem('Câmera em pausa. Toque em "Ligar Câmera" para retomar.');
     setStatusClasse('text-slate-400');
+    setStatusTipo('idle');
   }, []);
 
-  // Inicializa ao montar
+  // Inicializa ao montar com pequeno delay para garantir montagem do DOM
   useEffect(() => {
-    ligarCamera();
+    const timer = setTimeout(() => {
+      ligarCamera();
+    }, 150);
     return () => {
+      clearTimeout(timer);
       desligarCamera();
     };
   }, [ligarCamera, desligarCamera]);
@@ -206,15 +218,27 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={cameraAtiva ? desligarCamera : ligarCamera}
-            className="text-xs font-semibold text-slate-400 hover:text-emerald-400 flex items-center gap-1.5 transition cursor-pointer"
-            title={cameraAtiva ? 'Desligar Câmera' : 'Ligar Câmera'}
-          >
-            <Camera className="w-4 h-4" />
-            <span className="hidden sm:inline">{cameraAtiva ? 'Desligar' : 'Ligar'}</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={inverterCamera}
+              className="text-xs font-semibold text-slate-400 hover:text-cyan-400 p-1.5 rounded-lg bg-slate-950 border border-slate-800 transition cursor-pointer flex items-center gap-1"
+              title="Inverter Câmera (Frontal / Traseira)"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-[10px]">{facingMode === 'user' ? 'Frontal' : 'Traseira'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={cameraAtiva ? desligarCamera : () => ligarCamera()}
+              className="text-xs font-semibold text-slate-400 hover:text-emerald-400 p-1.5 rounded-lg bg-slate-950 border border-slate-800 transition cursor-pointer flex items-center gap-1"
+              title={cameraAtiva ? 'Desligar Câmera' : 'Ligar Câmera'}
+            >
+              <Camera className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline text-[10px]">{cameraAtiva ? 'Desligar' : 'Ligar'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Input de Identificação Prévia (CPF ou Matrícula para busca 1:1 no Supabase) */}
@@ -298,6 +322,27 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
             className="w-full h-full object-cover"
           />
 
+          {/* Overlay quando Câmera não estiver ativa */}
+          {!cameraAtiva && (
+            <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-4 text-center z-10 gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                <Camera className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-white">Sensor da Câmera Pronto</p>
+                <p className="text-xs text-slate-400 mt-0.5">Toque abaixo para ativar a imagem em tempo real</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => ligarCamera()}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider py-2.5 px-5 rounded-xl transition shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Ativar Câmera</span>
+              </button>
+            </div>
+          )}
+
           {/* Guia Visual Oval Centralizada */}
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
             <div className={`w-44 sm:w-48 h-60 sm:h-64 border-2 border-dashed rounded-full transition-all duration-300 ${
@@ -312,10 +357,14 @@ export const BotaoVerificacaoFacialBiometria: React.FC<BotaoVerificacaoFacialBio
           </div>
 
           {/* Badge Flutuante de Status da Câmera */}
-          <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
-            <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-emerald-400 px-2.5 py-1 rounded-md border border-emerald-500/30 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              LEITOR ATIVO
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-20">
+            <span className={`text-[10px] font-mono px-2.5 py-1 rounded-md border flex items-center gap-1.5 backdrop-blur-xs ${
+              cameraAtiva 
+                ? 'bg-slate-950/80 text-emerald-400 border-emerald-500/30' 
+                : 'bg-slate-950/80 text-amber-400 border-amber-500/30'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${cameraAtiva ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`} />
+              {cameraAtiva ? 'LEITOR ATIVO' : 'SENSOR EM ESPERA'}
             </span>
             <span className="bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
               Score Exigido: &ge; 95%

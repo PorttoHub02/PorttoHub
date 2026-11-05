@@ -1,10 +1,10 @@
 {
-  "versao": "0511261834",
-  "commit": "342bc9c",
-  "mensagem": "feat(mobile): layout responsivo completo do menu e navegacao mobile para celulares",
+  "versao": "0511261848",
+  "commit": "052f2d6",
+  "mensagem": "fix(camera): adicionar autoPlay e fallback multinivel para transmissao de video no totem e celular",
   "repositorio": "PorttoHub02/PorttoHub",
   "branch": "main",
-  "dataIso": "2026-11-05T21:34:02.979Z",
+  "dataIso": "2026-11-05T21:48:59.138Z",
   "fuso": "America/Sao_Paulo",
   "sucesso": true
 }

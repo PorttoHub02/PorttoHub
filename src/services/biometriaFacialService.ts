@@ -57,11 +57,14 @@ export async function compararBiometriaFacial(
 }
 
 /**
- * Inicializa a câmera do celular/totem no elemento de vídeo
+ * Inicializa a câmera do celular/totem no elemento de vídeo com fallback resiliente multi-nível
  */
-export async function iniciarLeitorFacial(videoElementId: string): Promise<boolean> {
+export async function iniciarLeitorFacial(
+  videoElementId: string,
+  facingMode: 'user' | 'environment' = 'user'
+): Promise<boolean> {
   try {
-    const video = document.getElementById(videoElementId) as HTMLVideoElement | null;
+    const video = (document.getElementById(videoElementId) || document.querySelector(`video[id="${videoElementId}"]`) || document.querySelector('video')) as HTMLVideoElement | null;
     if (!video) {
       console.warn(`[LeitorFacial] Elemento de vídeo #${videoElementId} não encontrado.`);
       return false;
@@ -70,19 +73,61 @@ export async function iniciarLeitorFacial(videoElementId: string): Promise<boole
     // Para qualquer stream anterior
     if (video.srcObject && video.srcObject instanceof MediaStream) {
       video.srcObject.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'user',
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      audio: false
-    });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.warn('[LeitorFacial] Dispositivo não suporta getUserMedia');
+      return false;
+    }
+
+    let stream: MediaStream | null = null;
+
+    // Nível 1: Resolução ideal e modo frontal/traseiro
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+    } catch {
+      // Nível 2: Apenas facingMode
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode },
+          audio: false
+        });
+      } catch {
+        // Nível 3: Qualquer câmera do dispositivo
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        } catch (e3) {
+          console.error('[LeitorFacial] Todas as tentativas de câmera falharam:', e3);
+          return false;
+        }
+      }
+    }
+
+    if (!stream) return false;
 
     video.srcObject = stream;
-    await video.play().catch(() => {});
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    video.muted = true;
+
+    try {
+      await video.play();
+    } catch (playErr: any) {
+      if (playErr?.name !== 'AbortError') {
+        console.warn('[LeitorFacial] Aviso no video.play():', playErr);
+      }
+    }
     return true;
   } catch (error) {
     console.error('[LeitorFacial] Erro ao acessar a câmera do dispositivo:', error);
@@ -91,27 +136,34 @@ export async function iniciarLeitorFacial(videoElementId: string): Promise<boole
 }
 
 /**
- * Converte URL ou Blob em Base64
+ * Converte URL ou Blob em Base64 de forma resiliente (suporta URLs remotas com fallback para o servidor)
  */
 export async function baixarImagemComoBase64(url: string): Promise<string> {
+  if (!url) return '';
   if (url.startsWith('data:')) {
     return url.split(',')[1] || url;
   }
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Falha ao baixar imagem oficial do morador (HTTP ${response.status})`);
+  // Tenta baixar no navegador; se CORS impedir, retorna a própria URL para o backend processar diretamente
+  try {
+    const response = await fetch(url, { mode: 'cors' });
+    if (response.ok) {
+      const blob = await response.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          resolve(res.split(',')[1] || res);
+        };
+        reader.onerror = () => resolve(url);
+        reader.readAsDataURL(blob);
+      });
+    }
+  } catch {
+    // CORS ou erro de rede do browser - o backend baixa diretamente sem CORS
   }
-  const blob = await response.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const res = reader.result as string;
-      resolve(res.split(',')[1] || res);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+
+  return url;
 }
 
 /**
@@ -237,9 +289,24 @@ export async function validarAcessoFacial(
   try {
     statusCallback('Capturando imagem da biometria...', 'text-yellow-400');
 
-    const video = document.getElementById(videoElementId) as HTMLVideoElement | null;
-    if (!video || video.readyState < 2) {
-      throw new Error('Câmera não inicializada corretamente. Aguarde o feed de vídeo.');
+    const video = (document.getElementById(videoElementId) || document.querySelector(`video[id="${videoElementId}"]`) || document.querySelector('video')) as HTMLVideoElement | null;
+    if (!video) {
+      throw new Error('Câmera não localizada na tela. Toque em "Ligar Câmera".');
+    }
+
+    // Se o vídeo ainda estiver carregando, aguarda até 1200ms
+    if (video.readyState < 2 || !video.videoWidth) {
+      statusCallback('Inicializando sensor da câmera...', 'text-cyan-400');
+      await new Promise<void>((resolve) => {
+        let attempts = 0;
+        const interval = setInterval(() => {
+          attempts++;
+          if ((video.readyState >= 2 && video.videoWidth > 0) || attempts > 12) {
+            clearInterval(interval);
+            resolve();
+          }
+        }, 100);
+      });
     }
 
     // 1. Capturar o frame atual da câmera e isolar em Base64 (Canvas)

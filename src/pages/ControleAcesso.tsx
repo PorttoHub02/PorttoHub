@@ -455,9 +455,9 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
 
   // Leitura Facial - Controle de Pessoa em Frente ao Visor & Modos Flexíveis
   const [selectedSubject, setSelectedSubject] = useState<MoradorBio | null>(null);
-  const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(true);
-  const [modoOperacional, setModoOperacional] = useState<'automatico' | 'manual'>('automatico');
-  const [intervaloAutoScan, setIntervaloAutoScan] = useState<number>(1.8); // 1.5s a 2s contínuo autônomo
+  const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(false);
+  const [modoOperacional, setModoOperacional] = useState<'automatico' | 'manual'>('manual');
+  const [intervaloAutoScan, setIntervaloAutoScan] = useState<number>(4.0); // Intervalo seguro e sustentável
   const autoScanTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Trava de concorrência rígida (Debounce & State Lock contra race conditions)
@@ -1195,14 +1195,17 @@ export default function ControleAcesso({ usuarioLogado, condominioAtivoProp }: C
     }
 
     autoScanTimerRef.current = setInterval(() => {
-      // Trava de concorrência: só executa se a câmera estiver ociosa e sem processamento pendente
+      // Trava de concorrência e prontidão da câmera: só executa se a câmera estiver pronta e ociosa
       if (!isProcessingRef.current && scanningStatus === 'idle') {
-        if (condoResidents.length > 0) {
-          const alvo = selectedSubject || condoResidents[0];
-          processFacialRecognition(alvo);
+        const v = videoRef.current;
+        if (v && v.readyState >= 2 && v.videoWidth > 0) {
+          if (condoResidents.length > 0) {
+            const alvo = selectedSubject || condoResidents[0];
+            processFacialRecognition(alvo);
+          }
         }
       }
-    }, Math.max(2, intervaloAutoScan) * 1000);
+    }, Math.max(3.5, intervaloAutoScan) * 1000);
 
     return () => {
       if (autoScanTimerRef.current) clearInterval(autoScanTimerRef.current);
