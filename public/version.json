@@ -1,10 +1,10 @@
 {
-  "versao": "0411262154",
-  "commit": "7e9afc6",
-  "mensagem": "feat(biometria): modulo especialista em auditoria e verificacao biometrica facial anatomica de alta precisao",
+  "versao": "0411262211",
+  "commit": "aef9eaa",
+  "mensagem": "feat(biometria): integrar componente de validacao facial anatomica com webcam e gemini",
   "repositorio": "PorttoHub02/PorttoHub",
   "branch": "main",
-  "dataIso": "2026-11-05T00:54:28.689Z",
+  "dataIso": "2026-11-05T01:11:50.768Z",
   "fuso": "America/Sao_Paulo",
   "sucesso": true
 }
